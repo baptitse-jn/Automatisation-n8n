@@ -1,0 +1,474 @@
+{
+  "name": "Agent Veille IA - Feedly to Notion",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Trigger 9h Quotidien",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://cloud.feedly.com/v3/profile",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-feedly-profile",
+      "name": "Get Feedly Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FEEDLY_CREDENTIALS_ID",
+          "name": "Feedly API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://cloud.feedly.com/v3/categories",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-feedly-categories",
+      "name": "Get Feedly Categories",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FEEDLY_CREDENTIALS_ID",
+          "name": "Feedly API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.label }}",
+              "rightValue": "VeilleArticleIA",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-veille-folder",
+      "name": "Filter VeilleArticleIA",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://cloud.feedly.com/v3/streams/contents?streamId={{ encodeURIComponent($json.id) }}&count=50&newerThan={{ Date.now() - 86400000 }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "get-articles-from-folder",
+      "name": "Get Articles from Folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "FEEDLY_CREDENTIALS_ID",
+          "name": "Feedly API Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "items",
+        "options": {}
+      },
+      "id": "split-articles",
+      "name": "Split Articles",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [1100, 0]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "batch-processing",
+      "name": "Process One by One",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1320, 0]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.search.brave.com/res/v1/web/search?q={{ encodeURIComponent($json.title + ' ' + ($json.keywords ? $json.keywords.slice(0,3).join(' ') : '')) }}&count=5",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "search-internet",
+      "name": "Recherche Internet (Brave)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, 0],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "BRAVE_API_CREDENTIALS_ID",
+          "name": "Brave Search API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "article_original",
+              "name": "article_original",
+              "value": "={{ $('Split Articles').item.json }}",
+              "type": "object"
+            },
+            {
+              "id": "recherches_web",
+              "name": "recherches_web",
+              "value": "={{ $json.web?.results || [] }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "prepare-data",
+      "name": "Prepare Data for AI",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1760, 0]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Tu es un expert en veille technologique et en rédaction d'articles.\n\n## ARTICLE ORIGINAL DE FEEDLY\nTitre: {{ $json.article_original.title }}\nSource: {{ $json.article_original.origin?.title || 'Non spécifiée' }}\nURL: {{ $json.article_original.alternate?.[0]?.href || $json.article_original.canonicalUrl || 'Non disponible' }}\nContenu: {{ $json.article_original.summary?.content || $json.article_original.content?.content || 'Pas de contenu' }}\n\n## RECHERCHES COMPLÉMENTAIRES\n{{ $json.recherches_web.map(r => '- ' + r.title + ': ' + r.description).join('\\n') }}\n\n## TA MISSION\nRédige un article de veille complet et professionnel en français basé sur ces informations.\n\nStructure ton article ainsi:\n1. **Titre accrocheur** - reformulé et optimisé\n2. **Résumé** (2-3 phrases) - L'essentiel à retenir\n3. **Analyse détaillée** - Développement avec insights\n4. **Impact et perspectives** - Pourquoi c'est important\n5. **Sources** - Liste des sources consultées\n\nSois factuel, pertinent et apporte de la valeur ajoutée par rapport à l'article original.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Tu es un analyste expert en veille technologique, spécialisé en Intelligence Artificielle. Tu rédiges des articles de veille structurés, professionnels et informatifs en français. Tu apportes toujours une analyse personnelle et des insights pertinents."
+        }
+      },
+      "id": "ai-agent-anthropic",
+      "name": "AI Agent - Rédaction Article",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1980, 0]
+    },
+    {
+      "parameters": {
+        "model": "claude-sonnet-4-20250514",
+        "options": {
+          "maxTokensToSample": 4096,
+          "temperature": 0.7
+        }
+      },
+      "id": "anthropic-model",
+      "name": "Anthropic Claude",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1980, 200],
+      "credentials": {
+        "anthropicApi": {
+          "id": "ANTHROPIC_CREDENTIALS_ID",
+          "name": "Anthropic API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "fromJson",
+        "jsonSchemaExample": "{\n  \"titre\": \"Titre de l'article\",\n  \"resume\": \"Résumé de l'article\",\n  \"analyse\": \"Analyse détaillée\",\n  \"impact\": \"Impact et perspectives\",\n  \"sources\": [\"source1\", \"source2\"]\n}"
+      },
+      "id": "output-parser",
+      "name": "Output Parser JSON",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [2200, 200]
+    },
+    {
+      "parameters": {
+        "resource": "databasePage",
+        "databaseId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "NOTION_DATABASE_ID"
+        },
+        "propertiesUi": {
+          "propertyValues": [
+            {
+              "key": "Titre|title",
+              "title": "={{ $json.output.titre }}"
+            },
+            {
+              "key": "Résumé|rich_text",
+              "richText": "={{ $json.output.resume }}"
+            },
+            {
+              "key": "Source Originale|url",
+              "urlValue": "={{ $('Split Articles').item.json.alternate?.[0]?.href || $('Split Articles').item.json.canonicalUrl }}"
+            },
+            {
+              "key": "Date|date",
+              "date": "={{ $now.toISODate() }}"
+            },
+            {
+              "key": "Statut|select",
+              "selectValue": "Nouveau"
+            }
+          ]
+        },
+        "blockUi": {
+          "blockValues": [
+            {
+              "type": "paragraph",
+              "richText": "={{ $json.output.analyse }}"
+            },
+            {
+              "type": "heading_2",
+              "textContent": "Impact et Perspectives"
+            },
+            {
+              "type": "paragraph",
+              "richText": "={{ $json.output.impact }}"
+            },
+            {
+              "type": "heading_2",
+              "textContent": "Sources"
+            },
+            {
+              "type": "bulleted_list_item",
+              "richText": "={{ $json.output.sources.join('\\n') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "notion-save",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.2,
+      "position": [2420, 0],
+      "credentials": {
+        "notionApi": {
+          "id": "NOTION_CREDENTIALS_ID",
+          "name": "Notion API Key"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "no-op-loop",
+      "name": "Loop Back",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2640, 0]
+    }
+  ],
+  "connections": {
+    "Trigger 9h Quotidien": {
+      "main": [
+        [
+          {
+            "node": "Get Feedly Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Feedly Profile": {
+      "main": [
+        [
+          {
+            "node": "Get Feedly Categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Feedly Categories": {
+      "main": [
+        [
+          {
+            "node": "Filter VeilleArticleIA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter VeilleArticleIA": {
+      "main": [
+        [
+          {
+            "node": "Get Articles from Folder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Articles from Folder": {
+      "main": [
+        [
+          {
+            "node": "Split Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Articles": {
+      "main": [
+        [
+          {
+            "node": "Process One by One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process One by One": {
+      "main": [
+        [
+          {
+            "node": "Recherche Internet (Brave)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recherche Internet (Brave)": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data for AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data for AI": {
+      "main": [
+        [
+          {
+            "node": "AI Agent - Rédaction Article",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent - Rédaction Article": {
+      "main": [
+        [
+          {
+            "node": "Save to Notion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Claude": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent - Rédaction Article",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Parser JSON": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "AI Agent - Rédaction Article",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Notion": {
+      "main": [
+        [
+          {
+            "node": "Process One by One",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {},
+  "versionId": "1",
+  "triggerCount": 1,
+  "tags": [
+    {
+      "name": "Veille",
+      "id": "veille-tag"
+    },
+    {
+      "name": "AI",
+      "id": "ai-tag"
+    }
+  ]
+}
