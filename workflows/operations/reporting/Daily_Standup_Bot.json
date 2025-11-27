@@ -1,0 +1,87 @@
+{
+  "name": "Daily Standup Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "triggerAtHour": 9, "triggerAtMinute": 30 }] }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 9h30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#engineering",
+        "text": ":sunrise: *Daily Standup*\n\nBonjour l'équipe! Répondez avec vos updates:\n\n:white_check_mark: Ce que j'ai fait hier\n:arrow_forward: Ce que je fais aujourd'hui\n:no_entry: Bloqueurs éventuels\n\nRépondez en thread!"
+      },
+      "id": "slack-prompt",
+      "name": "Send Standup Prompt",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [450, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": { "time": 3600, "unit": "seconds" },
+      "id": "wait-responses",
+      "name": "Wait 1 Hour",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "resource": "channel",
+        "operation": "replies",
+        "channelId": "#engineering",
+        "timestamp": "={{ $('Send Standup Prompt').first().json.ts }}"
+      },
+      "id": "get-replies",
+      "name": "Get Thread Replies",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [850, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Résume ces updates de standup:\n\n{{ $json.messages.map(m => m.text).join('\\n---\\n') }}\n\nGénère un résumé structuré:\n1. Points clés accomplis\n2. En cours aujourd'hui\n3. Bloqueurs à résoudre\n\nFormat: Markdown, concis." }] },
+        "options": { "maxTokens": 800 }
+      },
+      "id": "claude-summary",
+      "name": "Generate Summary",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [1050, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "channel": "#engineering",
+        "text": ":memo: *Résumé Standup - {{ new Date().toLocaleDateString('fr-FR') }}*\n\n{{ $json.message.content }}"
+      },
+      "id": "slack-summary",
+      "name": "Post Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": { "content": "## Daily Standup Bot\n\n**Objectif:** Collecte les updates d'équipe et génère un résumé IA\n\n**Flow:**\n1. 9h30: Post le prompt standup\n2. Attend 1h les réponses\n3. Récupère le thread\n4. Claude génère un résumé\n5. Poste le résumé\n\n**Credentials:** Slack API, Anthropic API" }
+    }
+  ],
+  "connections": {
+    "Daily 9h30": { "main": [[{ "node": "Send Standup Prompt", "type": "main", "index": 0 }]] },
+    "Send Standup Prompt": { "main": [[{ "node": "Wait 1 Hour", "type": "main", "index": 0 }]] },
+    "Wait 1 Hour": { "main": [[{ "node": "Get Thread Replies", "type": "main", "index": 0 }]] },
+    "Get Thread Replies": { "main": [[{ "node": "Generate Summary", "type": "main", "index": 0 }]] },
+    "Generate Summary": { "main": [[{ "node": "Post Summary", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operations" }, { "name": "standup" }, { "name": "ai" }]
+}

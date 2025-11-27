@@ -1,0 +1,43 @@
+{
+  "name": "NPS Survey Automation",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "interaction-complete", "options": {} },
+      "id": "webhook", "name": "Interaction Complete", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": { "time": 86400, "unit": "seconds" },
+      "id": "wait", "name": "Wait 24h", "type": "n8n-nodes-base.wait", "typeVersion": 1.1, "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "feedback@mywai.fr",
+        "toEmail": "={{ $('Interaction Complete').first().json.customerEmail }}",
+        "subject": "Votre avis compte - 30 secondes pour nous aider",
+        "html": "<div style='font-family:Arial;max-width:600px;margin:0 auto;text-align:center'><h2>Comment s'est passée votre expérience?</h2><p>Sur une échelle de 0 à 10, recommanderiez-vous MyWai?</p><div style='margin:20px 0'>{{ [0,1,2,3,4,5,6,7,8,9,10].map(n => `<a href='${$env.SURVEY_URL}?score=${n}&customer=${$('Interaction Complete').first().json.customerId}' style='display:inline-block;width:40px;height:40px;line-height:40px;margin:2px;background:${n<=6?\"#e74c3c\":n<=8?\"#f1c40f\":\"#27ae60\"};color:white;text-decoration:none;border-radius:4px'>${n}</a>`).join('') }}</div><p style='color:#666;font-size:12px'>Cliquez sur un chiffre pour répondre</p></div>"
+      },
+      "id": "send-survey", "name": "Send NPS Survey", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [650, 300],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_NPS_DB }}",
+        "properties": {
+          "Customer": { "title": [{ "text": { "content": "={{ $('Interaction Complete').first().json.customerEmail }}" } }] },
+          "Interaction Type": { "select": { "name": "={{ $('Interaction Complete').first().json.type }}" } },
+          "Survey Sent": { "date": { "start": "={{ new Date().toISOString() }}" } },
+          "Status": { "select": { "name": "Pending" } }
+        }
+      },
+      "id": "log-survey", "name": "Log Survey Sent", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Interaction Complete": { "main": [[{ "node": "Wait 24h", "type": "main", "index": 0 }]] },
+    "Wait 24h": { "main": [[{ "node": "Send NPS Survey", "type": "main", "index": 0 }]] },
+    "Send NPS Survey": { "main": [[{ "node": "Log Survey Sent", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "customer-service" }, { "name": "feedback" }, { "name": "nps" }]
+}

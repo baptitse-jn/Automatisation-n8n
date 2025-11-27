@@ -1,0 +1,69 @@
+{
+  "name": "Research Assistant Agent",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "research-query", "options": {} },
+      "id": "webhook", "name": "Research Query", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "={{ $json.query }}", "count": 10 } }
+      },
+      "id": "brave-search", "name": "Web Search", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 300],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.first().json.web?.results || [];\nreturn results.slice(0, 5).map(r => ({ json: { title: r.title, url: r.url, description: r.description } }));"
+      },
+      "id": "extract-results", "name": "Extract Top Results", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": { "response": { "response": { "fullResponse": true } } }
+      },
+      "id": "fetch-pages", "name": "Fetch Page Content", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const pages = $input.all().map(p => ({\n  title: p.json.title,\n  url: p.json.url,\n  content: (p.json.body || '').replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').substring(0, 3000)\n}));\nreturn [{ json: { query: $('Research Query').first().json.query, sources: pages } }];"
+      },
+      "id": "prepare-context", "name": "Prepare Context", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un assistant de recherche expert. Analyse ces sources et réponds à la question.\n\nQuestion: {{ $json.query }}\n\nSources:\n{{ $json.sources.map(s => `## ${s.title}\\nURL: ${s.url}\\n${s.content}`).join('\\n\\n---\\n\\n') }}\n\nGénère une réponse complète avec:\n1. Synthèse principale\n2. Points clés (bullet points)\n3. Nuances/limites\n4. Sources citées avec URLs\n\nFormat: Markdown structuré" }] },
+        "options": { "maxTokens": 2000 }
+      },
+      "id": "claude-synthesize", "name": "Synthesize Answer", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [1250, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_RESEARCH_DB }}",
+        "properties": {
+          "Query": { "title": [{ "text": { "content": "={{ $('Research Query').first().json.query }}" } }] },
+          "Sources Count": { "number": "={{ $('Prepare Context').first().json.sources.length }}" },
+          "Date": { "date": { "start": "={{ new Date().toISOString() }}" } }
+        },
+        "blockContent": "={{ $json.message.content }}"
+      },
+      "id": "notion-save", "name": "Save Research", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Research Query": { "main": [[{ "node": "Web Search", "type": "main", "index": 0 }]] },
+    "Web Search": { "main": [[{ "node": "Extract Top Results", "type": "main", "index": 0 }]] },
+    "Extract Top Results": { "main": [[{ "node": "Fetch Page Content", "type": "main", "index": 0 }]] },
+    "Fetch Page Content": { "main": [[{ "node": "Prepare Context", "type": "main", "index": 0 }]] },
+    "Prepare Context": { "main": [[{ "node": "Synthesize Answer", "type": "main", "index": 0 }]] },
+    "Synthesize Answer": { "main": [[{ "node": "Save Research", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "ai-agents" }, { "name": "research" }]
+}

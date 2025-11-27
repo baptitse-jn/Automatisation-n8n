@@ -1,0 +1,67 @@
+{
+  "name": "Ticket Triage AI",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "new-ticket", "options": {} },
+      "id": "webhook", "name": "New Support Ticket", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Analyse ce ticket support et classifie-le.\n\nSujet: {{ $json.subject }}\nMessage: {{ $json.message }}\nClient: {{ $json.customerEmail }}\n\nRetourne JSON:\n{\n  \"category\": \"technical|billing|account|feature_request|bug|general\",\n  \"priority\": \"critical|high|medium|low\",\n  \"sentiment\": \"angry|frustrated|neutral|positive\",\n  \"language\": \"fr|en|other\",\n  \"team\": \"tech_support|billing|product|general\",\n  \"suggestedResponse\": \"Réponse suggérée courte\",\n  \"requiresEscalation\": true/false,\n  \"summary\": \"Résumé en 1 phrase\"\n}" }] },
+        "options": { "maxTokens": 500 }
+      },
+      "id": "claude-triage", "name": "AI Triage", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [450, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ticket = $('New Support Ticket').first().json;\nconst triage = JSON.parse($input.first().json.message.content);\n\nconst teamChannels = {\n  'tech_support': '#support-tech',\n  'billing': '#support-billing',\n  'product': '#product-feedback',\n  'general': '#support-general'\n};\n\nreturn [{ json: { ticket, triage, channel: teamChannels[triage.team] || '#support-general' } }];"
+      },
+      "id": "prepare", "name": "Prepare Routing", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_TICKETS_DB }}",
+        "properties": {
+          "Subject": { "title": [{ "text": { "content": "={{ $json.ticket.subject }}" } }] },
+          "Customer": { "email": "={{ $json.ticket.customerEmail }}" },
+          "Category": { "select": { "name": "={{ $json.triage.category }}" } },
+          "Priority": { "select": { "name": "={{ $json.triage.priority }}" } },
+          "Team": { "select": { "name": "={{ $json.triage.team }}" } },
+          "Status": { "select": { "name": "New" } },
+          "Sentiment": { "select": { "name": "={{ $json.triage.sentiment }}" } }
+        },
+        "blockContent": "**Message:**\\n{{ $json.ticket.message }}\\n\\n**Résumé IA:** {{ $json.triage.summary }}\\n\\n**Réponse suggérée:** {{ $json.triage.suggestedResponse }}"
+      },
+      "id": "notion-create", "name": "Create Ticket", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.channel }}",
+        "text": "{{ $json.triage.priority === 'critical' ? ':rotating_light:' : $json.triage.priority === 'high' ? ':warning:' : ':ticket:' }} *Nouveau Ticket*\n\n*Sujet:* {{ $json.ticket.subject }}\n*Client:* {{ $json.ticket.customerEmail }}\n*Priorité:* {{ $json.triage.priority }}\n*Catégorie:* {{ $json.triage.category }}\n*Sentiment:* {{ $json.triage.sentiment }}\n\n_{{ $json.triage.summary }}_"
+      },
+      "id": "slack-route", "name": "Route to Team", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.triage.requiresEscalation }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "needs-escalation", "name": "Escalation?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 150]
+    },
+    {
+      "parameters": { "channel": "#support-managers", "text": ":rotating_light: *ESCALATION REQUISE*\n\nTicket: {{ $json.ticket.subject }}\nRaison: Client {{ $json.triage.sentiment }}, priorité {{ $json.triage.priority }}" },
+      "id": "slack-escalate", "name": "Escalate", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 150],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "New Support Ticket": { "main": [[{ "node": "AI Triage", "type": "main", "index": 0 }]] },
+    "AI Triage": { "main": [[{ "node": "Prepare Routing", "type": "main", "index": 0 }]] },
+    "Prepare Routing": { "main": [[{ "node": "Create Ticket", "type": "main", "index": 0 }, { "node": "Escalation?", "type": "main", "index": 0 }]] },
+    "Create Ticket": { "main": [[{ "node": "Route to Team", "type": "main", "index": 0 }]] },
+    "Escalation?": { "main": [[{ "node": "Escalate", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "customer-service" }, { "name": "triage" }, { "name": "ai" }]
+}

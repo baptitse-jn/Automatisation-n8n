@@ -1,0 +1,51 @@
+{
+  "name": "Data Analyst Agent",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "analyze-data", "options": {} },
+      "id": "webhook", "name": "Data Analysis Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $input.first().json;\nlet data = request.data;\n\n// Si c'est un CSV, parser\nif (typeof data === 'string' && data.includes(',')) {\n  const lines = data.trim().split('\\n');\n  const headers = lines[0].split(',');\n  data = lines.slice(1).map(line => {\n    const values = line.split(',');\n    return headers.reduce((obj, h, i) => ({ ...obj, [h.trim()]: values[i]?.trim() }), {});\n  });\n}\n\n// Stats basiques\nconst numericCols = Object.keys(data[0] || {}).filter(k => !isNaN(parseFloat(data[0][k])));\nconst stats = numericCols.map(col => {\n  const values = data.map(r => parseFloat(r[col])).filter(v => !isNaN(v));\n  return {\n    column: col,\n    count: values.length,\n    sum: values.reduce((a, b) => a + b, 0),\n    avg: values.reduce((a, b) => a + b, 0) / values.length,\n    min: Math.min(...values),\n    max: Math.max(...values)\n  };\n});\n\nreturn [{ json: { request: { question: request.question }, data: data.slice(0, 100), stats, rowCount: data.length } }];"
+      },
+      "id": "process-data", "name": "Process Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un data analyst expert. Analyse ces données et réponds à la question.\n\nQuestion: {{ $json.request.question }}\n\nDonnées ({{ $json.rowCount }} lignes, échantillon):\n{{ JSON.stringify($json.data.slice(0, 20), null, 2) }}\n\nStatistiques calculées:\n{{ JSON.stringify($json.stats, null, 2) }}\n\nGénère un rapport d'analyse:\n{\n  \"summary\": \"Résumé en 2-3 phrases\",\n  \"keyFindings\": [\"Finding 1\", \"Finding 2\", ...],\n  \"metrics\": { \"metric1\": value, ... },\n  \"trends\": [\"Trend 1\", ...],\n  \"anomalies\": [\"Anomalie 1\", ...],\n  \"recommendations\": [\"Reco 1\", ...],\n  \"visualizationSuggestions\": [\"Chart type 1\", ...]\n}" }] },
+        "options": { "maxTokens": 1500 }
+      },
+      "id": "claude-analyze", "name": "AI Analysis", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [650, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = JSON.parse($input.first().json.message.content);\nconst request = $('Process Data').first().json.request;\n\n// Générer markdown du rapport\nconst report = `# Rapport d'Analyse\\n\\n## Question\\n${request.question}\\n\\n## Résumé\\n${analysis.summary}\\n\\n## Findings Clés\\n${analysis.keyFindings.map(f => `- ${f}`).join('\\n')}\\n\\n## Métriques\\n${Object.entries(analysis.metrics).map(([k, v]) => `- **${k}**: ${v}`).join('\\n')}\\n\\n## Tendances\\n${analysis.trends.map(t => `- ${t}`).join('\\n')}\\n\\n## Anomalies\\n${analysis.anomalies.map(a => `- ${a}`).join('\\n')}\\n\\n## Recommandations\\n${analysis.recommendations.map(r => `- ${r}`).join('\\n')}`;\n\nreturn [{ json: { analysis, report } }];"
+      },
+      "id": "format-report", "name": "Format Report", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_ANALYTICS_DB }}",
+        "properties": {
+          "Question": { "title": [{ "text": { "content": "={{ $('Process Data').first().json.request.question }}" } }] },
+          "Data Rows": { "number": "={{ $('Process Data').first().json.rowCount }}" },
+          "Date": { "date": { "start": "={{ new Date().toISOString() }}" } }
+        },
+        "blockContent": "={{ $json.report }}"
+      },
+      "id": "notion-save", "name": "Save Report", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Data Analysis Request": { "main": [[{ "node": "Process Data", "type": "main", "index": 0 }]] },
+    "Process Data": { "main": [[{ "node": "AI Analysis", "type": "main", "index": 0 }]] },
+    "AI Analysis": { "main": [[{ "node": "Format Report", "type": "main", "index": 0 }]] },
+    "Format Report": { "main": [[{ "node": "Save Report", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "ai-agents" }, { "name": "analytics" }]
+}

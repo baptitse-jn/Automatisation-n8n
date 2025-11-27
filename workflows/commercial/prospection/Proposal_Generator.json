@@ -1,0 +1,196 @@
+{
+  "name": "Proposal Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-proposal",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Proposal Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "proposal-webhook"
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "get",
+        "contactId": "={{ $json.contactId }}"
+      },
+      "id": "hubspot-contact",
+      "name": "Get Contact Info",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [450, 200],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "get",
+        "dealId": "={{ $json.dealId }}"
+      },
+      "id": "hubspot-deal",
+      "name": "Get Deal Info",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [450, 400],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Proposal Request').first().json;\nconst contact = $('Get Contact Info').first().json.properties;\nconst deal = $('Get Deal Info').first().json.properties;\n\nreturn [{\n  json: {\n    contact: {\n      firstName: contact.firstname,\n      lastName: contact.lastname,\n      email: contact.email,\n      company: contact.company,\n      title: contact.jobtitle\n    },\n    deal: {\n      name: deal.dealname,\n      amount: parseFloat(deal.amount) || 0,\n      closeDate: deal.closedate,\n      description: deal.description\n    },\n    services: request.services || [],\n    customTerms: request.customTerms || '',\n    validityDays: request.validityDays || 30,\n    discount: request.discount || 0\n  }\n}];"
+      },
+      "id": "merge-data",
+      "name": "Merge All Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un expert en rédaction de propositions commerciales. Génère une proposition professionnelle.\n\nClient:\n- Nom: {{ $json.contact.firstName }} {{ $json.contact.lastName }}\n- Entreprise: {{ $json.contact.company }}\n- Poste: {{ $json.contact.title }}\n\nDeal:\n- Projet: {{ $json.deal.name }}\n- Budget: {{ $json.deal.amount }}€\n- Description: {{ $json.deal.description }}\n\nServices demandés: {{ JSON.stringify($json.services) }}\nConditions spéciales: {{ $json.customTerms }}\nRemise: {{ $json.discount }}%\nValidité: {{ $json.validityDays }} jours\n\nGénère un JSON avec:\n{\n  \"title\": \"Titre de la proposition\",\n  \"introduction\": \"Paragraphe d'introduction personnalisé\",\n  \"scope\": [\"Élément 1 du périmètre\", \"Élément 2\", ...],\n  \"deliverables\": [\"Livrable 1\", \"Livrable 2\", ...],\n  \"timeline\": \"Description du planning\",\n  \"pricing\": {\n    \"items\": [{\"description\": \"...\", \"price\": 0}],\n    \"subtotal\": 0,\n    \"discount\": 0,\n    \"total\": 0\n  },\n  \"terms\": [\"Condition 1\", \"Condition 2\", ...],\n  \"nextSteps\": \"Prochaines étapes\"\n}\n\nTon: Professionnel, orienté valeur, personnalisé."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2000
+        }
+      },
+      "id": "claude-generate",
+      "name": "Generate Proposal Content",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const proposal = JSON.parse($input.first().json.message.content);\nconst data = $('Merge All Data').first().json;\n\n// Générer HTML pour le PDF\nconst html = `\n<!DOCTYPE html>\n<html>\n<head>\n  <style>\n    body { font-family: Arial, sans-serif; margin: 40px; color: #333; }\n    h1 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }\n    h2 { color: #3498db; margin-top: 30px; }\n    .header { display: flex; justify-content: space-between; margin-bottom: 40px; }\n    .client-info { background: #f8f9fa; padding: 20px; border-radius: 8px; }\n    ul { line-height: 1.8; }\n    .pricing-table { width: 100%; border-collapse: collapse; margin: 20px 0; }\n    .pricing-table th, .pricing-table td { border: 1px solid #ddd; padding: 12px; text-align: left; }\n    .pricing-table th { background: #3498db; color: white; }\n    .total-row { font-weight: bold; background: #f8f9fa; }\n    .footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666; }\n  </style>\n</head>\n<body>\n  <div class=\"header\">\n    <div>\n      <h1>${proposal.title}</h1>\n      <p>Proposition n°${Date.now()} | Valide ${data.validityDays} jours</p>\n    </div>\n  </div>\n  \n  <div class=\"client-info\">\n    <strong>Pour:</strong> ${data.contact.firstName} ${data.contact.lastName}<br>\n    <strong>Entreprise:</strong> ${data.contact.company}<br>\n    <strong>Date:</strong> ${new Date().toLocaleDateString('fr-FR')}\n  </div>\n  \n  <h2>Introduction</h2>\n  <p>${proposal.introduction}</p>\n  \n  <h2>Périmètre</h2>\n  <ul>${proposal.scope.map(s => `<li>${s}</li>`).join('')}</ul>\n  \n  <h2>Livrables</h2>\n  <ul>${proposal.deliverables.map(d => `<li>${d}</li>`).join('')}</ul>\n  \n  <h2>Planning</h2>\n  <p>${proposal.timeline}</p>\n  \n  <h2>Tarification</h2>\n  <table class=\"pricing-table\">\n    <tr><th>Description</th><th>Prix</th></tr>\n    ${proposal.pricing.items.map(i => `<tr><td>${i.description}</td><td>${i.price.toLocaleString('fr-FR')}€</td></tr>`).join('')}\n    <tr><td>Sous-total</td><td>${proposal.pricing.subtotal.toLocaleString('fr-FR')}€</td></tr>\n    ${proposal.pricing.discount > 0 ? `<tr><td>Remise</td><td>-${proposal.pricing.discount.toLocaleString('fr-FR')}€</td></tr>` : ''}\n    <tr class=\"total-row\"><td>TOTAL</td><td>${proposal.pricing.total.toLocaleString('fr-FR')}€</td></tr>\n  </table>\n  \n  <h2>Conditions</h2>\n  <ul>${proposal.terms.map(t => `<li>${t}</li>`).join('')}</ul>\n  \n  <h2>Prochaines étapes</h2>\n  <p>${proposal.nextSteps}</p>\n  \n  <div class=\"footer\">\n    <p>MyWai - Proposition commerciale générée automatiquement</p>\n  </div>\n</body>\n</html>\n`;\n\nreturn [{ json: { proposal, html, data } }];"
+      },
+      "id": "generate-html",
+      "name": "Generate HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_PROPOSALS_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "={{ $json.proposal.title }}" } }] },
+          "Client": { "rich_text": [{ "text": { "content": "={{ $json.data.contact.company }}" } }] },
+          "Amount": { "number": "={{ $json.proposal.pricing.total }}" },
+          "Status": { "select": { "name": "Generated" } },
+          "Valid Until": { "date": { "start": "={{ new Date(Date.now() + $json.data.validityDays * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }}" } }
+        }
+      },
+      "id": "notion-save",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#sales",
+        "text": ":page_facing_up: *Nouvelle proposition générée*\n\n*Client:* {{ $json.data.contact.company }}\n*Contact:* {{ $json.data.contact.firstName }} {{ $json.data.contact.lastName }}\n*Montant:* {{ $json.proposal.pricing.total.toLocaleString('fr-FR') }}€\n\nProposition disponible dans Notion."
+      },
+      "id": "slack-notify",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Proposal Generator\n\n**Objectif:** Génère des propositions commerciales personnalisées avec IA\n\n**Flow:**\n1. Webhook avec IDs contact/deal\n2. Récupère infos contact HubSpot (parallèle)\n3. Récupère infos deal HubSpot (parallèle)\n4. Merge toutes les données\n5. Claude génère le contenu\n6. Conversion en HTML (prêt pour PDF)\n7. Sauvegarde Notion\n8. Notification Slack\n\n**Webhook payload:**\n```json\n{\n  \"contactId\": \"123\",\n  \"dealId\": \"456\",\n  \"services\": [\"Service 1\", \"Service 2\"],\n  \"customTerms\": \"Conditions spéciales\",\n  \"discount\": 10,\n  \"validityDays\": 30\n}\n```\n\n**Credentials requis:**\n- HubSpot API\n- Anthropic API\n- Notion API\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Proposal Request": {
+      "main": [
+        [
+          { "node": "Get Contact Info", "type": "main", "index": 0 },
+          { "node": "Get Deal Info", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Contact Info": {
+      "main": [[{ "node": "Merge All Data", "type": "main", "index": 0 }]]
+    },
+    "Get Deal Info": {
+      "main": [[{ "node": "Merge All Data", "type": "main", "index": 0 }]]
+    },
+    "Merge All Data": {
+      "main": [[{ "node": "Generate Proposal Content", "type": "main", "index": 0 }]]
+    },
+    "Generate Proposal Content": {
+      "main": [[{ "node": "Generate HTML", "type": "main", "index": 0 }]]
+    },
+    "Generate HTML": {
+      "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }]]
+    },
+    "Save to Notion": {
+      "main": [[{ "node": "Notify Team", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "commercial" },
+    { "name": "prospection" },
+    { "name": "proposal" },
+    { "name": "ai" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

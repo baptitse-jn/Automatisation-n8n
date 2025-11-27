@@ -1,0 +1,178 @@
+{
+  "name": "SEO Content Generator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "seo-content",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook - New Keyword",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "seo-content-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "qs": {
+            "q": "={{ $json.keyword }}",
+            "count": 10
+          }
+        }
+      },
+      "id": "brave-search",
+      "name": "Search Competitors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "brave-creds",
+          "name": "Brave Search API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $input.first().json.web?.results || [];\n\nconst competitors = results.slice(0, 5).map(r => ({\n  title: r.title,\n  description: r.description,\n  url: r.url\n}));\n\nreturn [{ json: { competitors, keyword: $('Webhook - New Keyword').first().json.keyword } }];"
+      },
+      "id": "extract-competitors",
+      "name": "Extract Top 5 Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un expert SEO et rédacteur web. Analyse les résultats concurrents et génère un article SEO optimisé.\n\nMot-clé cible: {{ $json.keyword }}\n\nTop 5 résultats actuels:\n{{ JSON.stringify($json.competitors, null, 2) }}\n\nGénère un article complet en JSON:\n{\n  \"title\": \"Titre H1 optimisé (60 car max, inclut le mot-clé)\",\n  \"metaDescription\": \"Meta description (155 car max, incitative)\",\n  \"slug\": \"url-slug-optimise\",\n  \"outline\": [\"H2 1\", \"H2 2\", \"H2 3\"],\n  \"content\": \"Article complet en markdown avec H2, H3, listes, 1500+ mots\",\n  \"internalLinks\": [\"suggestions de liens internes\"],\n  \"faq\": [{\"question\": \"...\", \"answer\": \"...\"}]\n}\n\nL'article doit:\n- Être meilleur et plus complet que la concurrence\n- Inclure le mot-clé naturellement (densité 1-2%)\n- Avoir une structure claire avec sous-titres\n- Inclure des listes et éléments scannables\n- Répondre aux questions des utilisateurs"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 4000
+        }
+      },
+      "id": "claude-generate",
+      "name": "Generate SEO Article",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst article = JSON.parse(response.message.content);\nconst keyword = $('Extract Top 5 Results').first().json.keyword;\n\nreturn [{ \n  json: {\n    ...article,\n    keyword,\n    generatedAt: new Date().toISOString(),\n    wordCount: article.content.split(/\\s+/).length\n  }\n}];"
+      },
+      "id": "parse-article",
+      "name": "Parse Article",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_CONTENT_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "={{ $json.title }}" } }] },
+          "Keyword": { "rich_text": [{ "text": { "content": "={{ $json.keyword }}" } }] },
+          "Slug": { "rich_text": [{ "text": { "content": "={{ $json.slug }}" } }] },
+          "Meta Description": { "rich_text": [{ "text": { "content": "={{ $json.metaDescription }}" } }] },
+          "Word Count": { "number": "={{ $json.wordCount }}" },
+          "Status": { "select": { "name": "Draft" } }
+        },
+        "blockContent": "={{ $json.content }}"
+      },
+      "id": "notion-create",
+      "name": "Create Notion Page",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#content",
+        "text": ":pencil: Nouvel article SEO généré!\n\n*Mot-clé:* {{ $json.keyword }}\n*Titre:* {{ $json.title }}\n*Mots:* {{ $json.wordCount }}\n\nArticle disponible dans Notion pour review."
+      },
+      "id": "slack-notify",
+      "name": "Notify Content Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## SEO Content Generator\n\n**Objectif:** Génère des articles SEO optimisés basés sur l'analyse de la concurrence\n\n**Flow:**\n1. Webhook reçoit le mot-clé cible\n2. Recherche Brave pour analyser le top 5\n3. Claude génère un article supérieur\n4. Parse et enrichit les données\n5. Crée une page Notion\n6. Notifie l'équipe content\n\n**Webhook payload:**\n```json\n{\n  \"keyword\": \"automatisation n8n\"\n}\n```\n\n**Credentials requis:**\n- Brave Search API\n- Anthropic API\n- Notion API\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Webhook - New Keyword": {
+      "main": [[{ "node": "Search Competitors", "type": "main", "index": 0 }]]
+    },
+    "Search Competitors": {
+      "main": [[{ "node": "Extract Top 5 Results", "type": "main", "index": 0 }]]
+    },
+    "Extract Top 5 Results": {
+      "main": [[{ "node": "Generate SEO Article", "type": "main", "index": 0 }]]
+    },
+    "Generate SEO Article": {
+      "main": [[{ "node": "Parse Article", "type": "main", "index": 0 }]]
+    },
+    "Parse Article": {
+      "main": [[{ "node": "Create Notion Page", "type": "main", "index": 0 }]]
+    },
+    "Create Notion Page": {
+      "main": [[{ "node": "Notify Content Team", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "marketing" },
+    { "name": "seo" },
+    { "name": "content" },
+    { "name": "ai" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

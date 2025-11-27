@@ -1,0 +1,193 @@
+{
+  "name": "Campaign Performance Report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [5],
+              "triggerAtHour": 17
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Friday 17h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.mailchimp.com/3.0/reports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {
+          "qs": {
+            "since_send_time": "={{ new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() }}"
+          }
+        }
+      },
+      "id": "mailchimp-reports",
+      "name": "Get Mailchimp Reports",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 200],
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "mailchimp-basic",
+          "name": "Mailchimp Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.hubspot.com/analytics/v2/reports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "id": "hubspot-analytics",
+      "name": "Get HubSpot Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "hubspot-header",
+          "name": "HubSpot API Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const mailchimp = $('Get Mailchimp Reports').first().json.reports || [];\nconst hubspot = $('Get HubSpot Analytics').first().json || {};\n\n// Agrégation Mailchimp\nconst emailStats = mailchimp.reduce((acc, report) => {\n  acc.totalSent += report.emails_sent || 0;\n  acc.totalOpens += report.opens?.opens_total || 0;\n  acc.totalClicks += report.clicks?.clicks_total || 0;\n  acc.campaigns.push({\n    name: report.campaign_title,\n    sent: report.emails_sent,\n    openRate: ((report.opens?.open_rate || 0) * 100).toFixed(1) + '%',\n    clickRate: ((report.clicks?.click_rate || 0) * 100).toFixed(1) + '%'\n  });\n  return acc;\n}, { totalSent: 0, totalOpens: 0, totalClicks: 0, campaigns: [] });\n\nreturn [{\n  json: {\n    period: 'Semaine du ' + new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toLocaleDateString('fr-FR'),\n    email: emailStats,\n    hubspot: hubspot,\n    generatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "aggregate-data",
+      "name": "Aggregate All Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un analyste marketing. Génère un rapport de performance hebdomadaire basé sur ces données:\n\n{{ JSON.stringify($json, null, 2) }}\n\nStructure du rapport:\n1. **Résumé Exécutif** (3-4 phrases clés)\n2. **Performance Email**\n   - Métriques clés avec évolution\n   - Top 3 campagnes\n   - Points d'amélioration\n3. **Recommandations** (3 actions prioritaires)\n\nFormat: Markdown, concis, orienté action.\nTon: Professionnel, data-driven."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1500
+        }
+      },
+      "id": "claude-analyze",
+      "name": "Generate AI Analysis",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_REPORTS_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "Rapport Marketing - {{ $('Aggregate All Data').first().json.period }}" } }] },
+          "Type": { "select": { "name": "Weekly" } },
+          "Status": { "select": { "name": "Generated" } }
+        },
+        "blockContent": "={{ $json.message.content }}"
+      },
+      "id": "notion-save",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1050, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#marketing",
+        "text": ":chart_with_upwards_trend: *Rapport Marketing Hebdomadaire*\n\n{{ $('Generate AI Analysis').first().json.message.content }}\n\n_Rapport complet disponible dans Notion_"
+      },
+      "id": "slack-report",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Campaign Performance Report\n\n**Objectif:** Génère un rapport de performance marketing hebdomadaire avec analyse IA\n\n**Flow:**\n1. Trigger chaque vendredi 17h\n2. Récupère données Mailchimp (parallèle)\n3. Récupère données HubSpot (parallèle)\n4. Agrège toutes les données\n5. Génère analyse avec Claude\n6. Sauvegarde dans Notion\n7. Poste sur Slack\n\n**Métriques incluses:**\n- Taux d'ouverture email\n- Taux de clic\n- Performance par campagne\n- Tendances vs semaine précédente\n\n**Credentials requis:**\n- Mailchimp API\n- HubSpot API\n- Anthropic API\n- Notion API\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Every Friday 17h": {
+      "main": [
+        [
+          { "node": "Get Mailchimp Reports", "type": "main", "index": 0 },
+          { "node": "Get HubSpot Analytics", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Mailchimp Reports": {
+      "main": [[{ "node": "Aggregate All Data", "type": "main", "index": 0 }]]
+    },
+    "Get HubSpot Analytics": {
+      "main": [[{ "node": "Aggregate All Data", "type": "main", "index": 0 }]]
+    },
+    "Aggregate All Data": {
+      "main": [[{ "node": "Generate AI Analysis", "type": "main", "index": 0 }]]
+    },
+    "Generate AI Analysis": {
+      "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }]]
+    },
+    "Save to Notion": {
+      "main": [[{ "node": "Post to Slack", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "marketing" },
+    { "name": "analytics" },
+    { "name": "reporting" },
+    { "name": "ai" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

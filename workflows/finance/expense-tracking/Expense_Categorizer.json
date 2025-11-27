@@ -1,0 +1,47 @@
+{
+  "name": "Expense Categorizer",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "new-expense", "options": {} },
+      "id": "webhook", "name": "New Expense", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Catégorise cette dépense:\n\nMontant: {{ $json.amount }}€\nDescription: {{ $json.description }}\nMarchand: {{ $json.merchant }}\nDate: {{ $json.date }}\n\nRetourne JSON:\n{\n  \"category\": \"transport|repas|logiciel|fournitures|marketing|voyage|telecom|autre\",\n  \"subcategory\": \"...\",\n  \"taxDeductible\": true/false,\n  \"vatRate\": 20/10/5.5/0,\n  \"accountingCode\": \"6xxxxx\",\n  \"notes\": \"...\"\n}" }] },
+        "options": { "maxTokens": 300 }
+      },
+      "id": "claude-categorize", "name": "Categorize with AI", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [450, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const expense = $('New Expense').first().json;\nconst categorization = JSON.parse($input.first().json.message.content);\n\nreturn [{\n  json: {\n    ...expense,\n    ...categorization,\n    vatAmount: expense.amount * (categorization.vatRate / 100),\n    netAmount: expense.amount / (1 + categorization.vatRate / 100),\n    processedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "enrich", "name": "Enrich Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_EXPENSES_DB }}",
+        "properties": {
+          "Description": { "title": [{ "text": { "content": "={{ $json.description }}" } }] },
+          "Amount": { "number": "={{ $json.amount }}" },
+          "Category": { "select": { "name": "={{ $json.category }}" } },
+          "Merchant": { "rich_text": [{ "text": { "content": "={{ $json.merchant }}" } }] },
+          "Date": { "date": { "start": "={{ $json.date }}" } },
+          "Accounting Code": { "rich_text": [{ "text": { "content": "={{ $json.accountingCode }}" } }] },
+          "Tax Deductible": { "checkbox": "={{ $json.taxDeductible }}" }
+        }
+      },
+      "id": "notion-save", "name": "Save to Notion", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "New Expense": { "main": [[{ "node": "Categorize with AI", "type": "main", "index": 0 }]] },
+    "Categorize with AI": { "main": [[{ "node": "Enrich Data", "type": "main", "index": 0 }]] },
+    "Enrich Data": { "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "finance" }, { "name": "expenses" }, { "name": "ai" }]
+}

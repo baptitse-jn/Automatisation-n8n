@@ -1,0 +1,78 @@
+{
+  "name": "Regulatory Watch",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "days", "triggerAtHour": 7 }] } },
+      "id": "schedule", "name": "Daily 7h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/news/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "RGPD OR GDPR OR \"AI Act\" OR \"Digital Services Act\" regulation compliance", "count": 20, "freshness": "pd" } }
+      },
+      "id": "search-eu", "name": "Search EU Regulations", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 200],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/news/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $env.INDUSTRY_KEYWORDS }} regulation law compliance amendment", "count": 20, "freshness": "pd" } }
+      },
+      "id": "search-industry", "name": "Search Industry Regs", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 400],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const eu = ($('Search EU Regulations').first().json.results || []).map(r => ({ ...r, category: 'EU' }));\nconst industry = ($('Search Industry Regs').first().json.results || []).map(r => ({ ...r, category: 'Industry' }));\n\nconst all = [...eu, ...industry].map(r => ({ title: r.title, description: r.description, url: r.url, source: r.source, category: r.category }));\n\nreturn [{ json: { updates: all.slice(0, 15), date: new Date().toISOString().split('T')[0] } }];"
+      },
+      "id": "compile", "name": "Compile Updates", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.updates.length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }] } },
+      "id": "has-updates", "name": "Has Updates?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un expert en conformité réglementaire. Analyse ces actualités.\n\n{{ JSON.stringify($json.updates, null, 2) }}\n\nGénère:\n{\n  \"summary\": \"Résumé des évolutions réglementaires\",\n  \"alerts\": [\n    { \"regulation\": \"Nom\", \"type\": \"new|amendment|deadline|enforcement\", \"urgency\": \"immediate|soon|monitor\", \"impact\": \"Description de l'impact\", \"action\": \"Action requise\" }\n  ],\n  \"deadlines\": [{ \"regulation\": \"...\", \"date\": \"...\", \"description\": \"...\" }],\n  \"recommendations\": [\"Reco 1\", ...]\n}" }] },
+        "options": { "maxTokens": 1200 }
+      },
+      "id": "claude-analyze", "name": "Analyze Impact", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [1050, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = JSON.parse($input.first().json.message.content);\nconst urgent = analysis.alerts.filter(a => a.urgency === 'immediate');\nreturn [{ json: { analysis, hasUrgent: urgent.length > 0, urgent } }];"
+      },
+      "id": "check-urgent", "name": "Check Urgency", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1250, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.hasUrgent }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "is-urgent", "name": "Is Urgent?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [1450, 200]
+    },
+    {
+      "parameters": { "channel": "#legal", "text": ":rotating_light: *ALERTE RÉGLEMENTAIRE URGENTE*\n\n{{ $json.urgent.map(a => `*${a.regulation}*\\n${a.impact}\\n➡️ ${a.action}`).join('\\n\\n') }}" },
+      "id": "slack-urgent", "name": "Urgent Alert", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1650, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": { "channel": "#compliance", "text": ":scroll: *Veille Réglementaire - {{ $('Compile Updates').first().json.date }}*\n\n{{ $json.analysis.summary }}\n\n*Alertes:*\n{{ $json.analysis.alerts.map(a => `• ${a.regulation} (${a.urgency}): ${a.impact}`).join('\\n') }}" },
+      "id": "slack-daily", "name": "Daily Update", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1450, 400],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Daily 7h": { "main": [[{ "node": "Search EU Regulations", "type": "main", "index": 0 }, { "node": "Search Industry Regs", "type": "main", "index": 0 }]] },
+    "Search EU Regulations": { "main": [[{ "node": "Compile Updates", "type": "main", "index": 0 }]] },
+    "Search Industry Regs": { "main": [[{ "node": "Compile Updates", "type": "main", "index": 0 }]] },
+    "Compile Updates": { "main": [[{ "node": "Has Updates?", "type": "main", "index": 0 }]] },
+    "Has Updates?": { "main": [[{ "node": "Analyze Impact", "type": "main", "index": 0 }]] },
+    "Analyze Impact": { "main": [[{ "node": "Check Urgency", "type": "main", "index": 0 }]] },
+    "Check Urgency": { "main": [[{ "node": "Is Urgent?", "type": "main", "index": 0 }, { "node": "Daily Update", "type": "main", "index": 0 }]] },
+    "Is Urgent?": { "main": [[{ "node": "Urgent Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "veille" }, { "name": "regulatory" }]
+}

@@ -1,0 +1,229 @@
+{
+  "name": "Lead Enrichment Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "new-lead-webhook"
+    },
+    {
+      "parameters": {
+        "url": "https://api.apollo.io/v1/people/match",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "body": {
+          "email": "={{ $json.email }}"
+        },
+        "options": {}
+      },
+      "id": "apollo-enrich",
+      "name": "Enrich with Apollo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "apollo-creds",
+          "name": "Apollo API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.clearbit.com/v2/people/find",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "qs": {
+            "email": "={{ $json.email }}"
+          }
+        }
+      },
+      "id": "clearbit-enrich",
+      "name": "Enrich with Clearbit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 400],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "clearbit-creds",
+          "name": "Clearbit API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('New Lead Webhook').first().json;\nconst apollo = $('Enrich with Apollo').first().json.person || {};\nconst clearbit = $('Enrich with Clearbit').first().json || {};\n\n// Merge des données\nconst enriched = {\n  email: original.email,\n  firstName: apollo.first_name || clearbit.name?.givenName || original.firstName || '',\n  lastName: apollo.last_name || clearbit.name?.familyName || original.lastName || '',\n  company: apollo.organization?.name || clearbit.employment?.name || '',\n  title: apollo.title || clearbit.employment?.title || '',\n  linkedinUrl: apollo.linkedin_url || clearbit.linkedin?.handle || '',\n  location: apollo.city || clearbit.geo?.city || '',\n  companySize: apollo.organization?.estimated_num_employees || clearbit.employment?.seniority || '',\n  industry: apollo.organization?.industry || clearbit.employment?.domain || '',\n  source: original.source || 'unknown'\n};\n\n// Calcul du score\nlet score = 0;\nif (enriched.company) score += 20;\nif (enriched.title) score += 15;\nif (enriched.linkedinUrl) score += 10;\nif (enriched.companySize > 50) score += 25;\nif (['CEO', 'CTO', 'CMO', 'Director', 'VP'].some(t => enriched.title.includes(t))) score += 30;\n\nenriched.leadScore = score;\nenriched.priority = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold';\n\nreturn [{ json: enriched }];"
+      },
+      "id": "merge-score",
+      "name": "Merge & Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "create",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.firstName }}",
+          "lastName": "={{ $json.lastName }}",
+          "company": "={{ $json.company }}",
+          "jobTitle": "={{ $json.title }}",
+          "city": "={{ $json.location }}",
+          "customFields": {
+            "linkedin_url": "={{ $json.linkedinUrl }}",
+            "lead_score": "={{ $json.leadScore }}",
+            "lead_priority": "={{ $json.priority }}",
+            "company_size": "={{ $json.companySize }}",
+            "industry": "={{ $json.industry }}"
+          }
+        }
+      },
+      "id": "hubspot-create",
+      "name": "Create HubSpot Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hot-lead",
+              "leftValue": "={{ $json.priority }}",
+              "rightValue": "hot",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-hot",
+      "name": "Is Hot Lead?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "channel": "#sales-alerts",
+        "text": ":fire: *Nouveau Lead Hot!*\n\n*Nom:* {{ $('Merge & Score Lead').first().json.firstName }} {{ $('Merge & Score Lead').first().json.lastName }}\n*Email:* {{ $('Merge & Score Lead').first().json.email }}\n*Entreprise:* {{ $('Merge & Score Lead').first().json.company }}\n*Poste:* {{ $('Merge & Score Lead').first().json.title }}\n*Score:* {{ $('Merge & Score Lead').first().json.leadScore }}/100\n*LinkedIn:* {{ $('Merge & Score Lead').first().json.linkedinUrl }}\n\n<@sales-team> À contacter en priorité!"
+      },
+      "id": "slack-alert",
+      "name": "Alert Sales Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1250, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_LEADS_DB }}",
+        "properties": {
+          "Name": { "title": [{ "text": { "content": "={{ $json.firstName }} {{ $json.lastName }}" } }] },
+          "Email": { "email": "={{ $json.email }}" },
+          "Company": { "rich_text": [{ "text": { "content": "={{ $json.company }}" } }] },
+          "Score": { "number": "={{ $json.leadScore }}" },
+          "Priority": { "select": { "name": "={{ $json.priority }}" } },
+          "Status": { "select": { "name": "New" } }
+        }
+      },
+      "id": "notion-log",
+      "name": "Log to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1050, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Lead Enrichment Pipeline\n\n**Objectif:** Enrichit automatiquement les nouveaux leads avec données tierces et scoring\n\n**Flow:**\n1. Webhook reçoit nouveau lead (email minimum)\n2. Enrichissement Apollo (parallèle)\n3. Enrichissement Clearbit (parallèle)\n4. Merge des données + calcul du score\n5. Création contact HubSpot\n6. Si lead hot → Alerte Slack\n7. Log dans Notion\n\n**Scoring:**\n- Entreprise identifiée: +20\n- Poste identifié: +15\n- LinkedIn trouvé: +10\n- Entreprise >50 employés: +25\n- Poste décisionnel: +30\n\n**Priorité:**\n- Hot: 70+\n- Warm: 40-69\n- Cold: <40\n\n**Credentials requis:**\n- Apollo API\n- Clearbit API\n- HubSpot API\n- Slack API\n- Notion API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "New Lead Webhook": {
+      "main": [
+        [
+          { "node": "Enrich with Apollo", "type": "main", "index": 0 },
+          { "node": "Enrich with Clearbit", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Enrich with Apollo": {
+      "main": [[{ "node": "Merge & Score Lead", "type": "main", "index": 0 }]]
+    },
+    "Enrich with Clearbit": {
+      "main": [[{ "node": "Merge & Score Lead", "type": "main", "index": 0 }]]
+    },
+    "Merge & Score Lead": {
+      "main": [[{ "node": "Create HubSpot Contact", "type": "main", "index": 0 }]]
+    },
+    "Create HubSpot Contact": {
+      "main": [
+        [
+          { "node": "Is Hot Lead?", "type": "main", "index": 0 },
+          { "node": "Log to Notion", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Is Hot Lead?": {
+      "main": [[{ "node": "Alert Sales Team", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "commercial" },
+    { "name": "lead-generation" },
+    { "name": "enrichment" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

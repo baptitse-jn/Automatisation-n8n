@@ -1,0 +1,70 @@
+{
+  "name": "Leave Request Handler",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "leave-request", "options": {} },
+      "id": "webhook", "name": "Leave Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query", "databaseId": "={{ $env.NOTION_EMPLOYEES_DB }}",
+        "filterJson": "{ \"property\": \"Email\", \"email\": { \"equals\": \"{{ $json.employeeEmail }}\" } }"
+      },
+      "id": "get-employee", "name": "Get Employee Data", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Leave Request').first().json;\nconst employee = $input.first().json;\n\nconst startDate = new Date(request.startDate);\nconst endDate = new Date(request.endDate);\nconst days = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;\n\nconst balance = employee.properties.Leave_Balance?.number || 25;\nconst canApprove = balance >= days;\n\nreturn [{\n  json: {\n    request: { ...request, days },\n    employee: {\n      name: employee.properties.Name?.title?.[0]?.plain_text,\n      email: employee.properties.Email?.email,\n      manager: employee.properties.Manager?.email,\n      balance,\n      newBalance: balance - days\n    },\n    canApprove,\n    autoApprove: days <= 2 && canApprove\n  }\n}];"
+      },
+      "id": "check-balance", "name": "Check Balance", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.autoApprove }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "auto-approve", "name": "Auto Approve?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "resource": "event", "operation": "create", "calendarId": "={{ $env.TEAM_CALENDAR_ID }}",
+        "summary": "Congé - {{ $json.employee.name }}",
+        "start": "={{ $json.request.startDate }}", "end": "={{ $json.request.endDate }}",
+        "additionalFields": { "description": "Type: {{ $json.request.type }}" }
+      },
+      "id": "create-event", "name": "Add to Calendar", "type": "n8n-nodes-base.googleCalendar", "typeVersion": 1.2, "position": [1050, 200],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "gcal-creds", "name": "Google Calendar OAuth2" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "rh@company.com", "toEmail": "={{ $json.employee.manager }}",
+        "subject": "Demande de congé - {{ $json.employee.name }}",
+        "html": "<h2>Demande de congé à valider</h2><p><b>{{ $json.employee.name }}</b> demande {{ $json.request.days }} jour(s) de congé.</p><p>Du {{ $json.request.startDate }} au {{ $json.request.endDate }}</p><p>Type: {{ $json.request.type }}</p><p>Solde actuel: {{ $json.employee.balance }} jours</p><p><a href='{{ $env.APPROVE_URL }}'>Approuver</a> | <a href='{{ $env.REJECT_URL }}'>Refuser</a></p>"
+      },
+      "id": "send-approval", "name": "Send to Manager", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1050, 400],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_LEAVES_DB }}",
+        "properties": {
+          "Employee": { "title": [{ "text": { "content": "={{ $json.employee.name }}" } }] },
+          "Start": { "date": { "start": "={{ $json.request.startDate }}" } },
+          "End": { "date": { "start": "={{ $json.request.endDate }}" } },
+          "Days": { "number": "={{ $json.request.days }}" },
+          "Type": { "select": { "name": "={{ $json.request.type }}" } },
+          "Status": { "select": { "name": "={{ $json.autoApprove ? 'Approved' : 'Pending' }}" } }
+        }
+      },
+      "id": "notion-log", "name": "Log Request", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Leave Request": { "main": [[{ "node": "Get Employee Data", "type": "main", "index": 0 }]] },
+    "Get Employee Data": { "main": [[{ "node": "Check Balance", "type": "main", "index": 0 }]] },
+    "Check Balance": { "main": [[{ "node": "Auto Approve?", "type": "main", "index": 0 }, { "node": "Log Request", "type": "main", "index": 0 }]] },
+    "Auto Approve?": { "main": [[{ "node": "Add to Calendar", "type": "main", "index": 0 }]] },
+    "Log Request": { "main": [[{ "node": "Send to Manager", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "leave" }]
+}

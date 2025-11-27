@@ -1,0 +1,180 @@
+{
+  "name": "Press Release Distributor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "press-release",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Press Release",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "press-release-webhook"
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "databaseId": "={{ $env.NOTION_PRESS_CONTACTS_DB }}",
+        "filterJson": "{\n  \"property\": \"Status\",\n  \"select\": {\n    \"equals\": \"Active\"\n  }\n}"
+      },
+      "id": "notion-contacts",
+      "name": "Get Press Contacts",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [450, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const contacts = $input.all().map(c => c.json);\nconst release = $('New Press Release').first().json;\n\nreturn contacts.map(contact => ({\n  json: {\n    contact: {\n      name: contact.properties.Name?.title?.[0]?.plain_text || 'Journaliste',\n      email: contact.properties.Email?.email,\n      media: contact.properties.Media?.rich_text?.[0]?.plain_text || '',\n      beat: contact.properties.Beat?.select?.name || 'General'\n    },\n    release: {\n      title: release.title,\n      subtitle: release.subtitle || '',\n      body: release.body,\n      quote: release.quote || '',\n      quotePerson: release.quotePerson || '',\n      boilerplate: release.boilerplate || '',\n      contactInfo: release.contactInfo || '',\n      embargo: release.embargo || null,\n      assets: release.assets || []\n    }\n  }\n}));"
+      },
+      "id": "prepare-distribution",
+      "name": "Prepare Distribution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Personnalise ce communiqué de presse pour ce journaliste.\n\nJournaliste:\n- Nom: {{ $json.contact.name }}\n- Média: {{ $json.contact.media }}\n- Spécialité: {{ $json.contact.beat }}\n\nCommuniqué:\n- Titre: {{ $json.release.title }}\n- Sous-titre: {{ $json.release.subtitle }}\n- Corps: {{ $json.release.body }}\n- Citation: {{ $json.release.quote }} - {{ $json.release.quotePerson }}\n- Embargo: {{ $json.release.embargo || 'Aucun' }}\n\nGénère un JSON:\n{\n  \"subject\": \"Objet email personnalisé\",\n  \"intro\": \"Paragraphe d'accroche personnalisé selon la spécialité du journaliste\",\n  \"relevance\": \"Pourquoi c'est pertinent pour son média/beat\"\n}\n\nSois pertinent et concis."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 500
+        }
+      },
+      "id": "claude-personalize",
+      "name": "Personalize for Journalist",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "presse@mywai.fr",
+        "toEmail": "={{ $('Prepare Distribution').item.json.contact.email }}",
+        "subject": "={{ JSON.parse($json.message.content).subject }}",
+        "html": "<div style=\"font-family: Georgia, serif; max-width: 700px; margin: 0 auto;\">\n  <p>Bonjour {{ $('Prepare Distribution').item.json.contact.name }},</p>\n  \n  <p>{{ JSON.parse($json.message.content).intro }}</p>\n  \n  <hr style=\"border: none; border-top: 2px solid #333; margin: 30px 0;\">\n  \n  <h1 style=\"font-size: 24px;\">{{ $('Prepare Distribution').item.json.release.title }}</h1>\n  <h2 style=\"font-size: 18px; color: #666;\">{{ $('Prepare Distribution').item.json.release.subtitle }}</h2>\n  \n  <div style=\"margin: 20px 0;\">{{ $('Prepare Distribution').item.json.release.body }}</div>\n  \n  {{ $('Prepare Distribution').item.json.release.quote ? `<blockquote style=\"border-left: 3px solid #333; padding-left: 15px; font-style: italic;\">\"${$('Prepare Distribution').item.json.release.quote}\"<br><strong>— ${$('Prepare Distribution').item.json.release.quotePerson}</strong></blockquote>` : '' }}\n  \n  <hr style=\"border: none; border-top: 1px solid #ddd; margin: 30px 0;\">\n  \n  <p style=\"font-size: 14px; color: #666;\">{{ $('Prepare Distribution').item.json.release.boilerplate }}</p>\n  \n  <p style=\"font-size: 14px;\"><strong>Contact presse:</strong><br>{{ $('Prepare Distribution').item.json.release.contactInfo }}</p>\n</div>",
+        "options": {
+          "replyTo": "presse@mywai.fr"
+        }
+      },
+      "id": "send-release",
+      "name": "Send Press Release",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1050, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_PR_TRACKING_DB }}",
+        "properties": {
+          "Release": { "title": [{ "text": { "content": "={{ $('New Press Release').first().json.title }}" } }] },
+          "Contacts Sent": { "number": "={{ $('Prepare Distribution').all().length }}" },
+          "Sent At": { "date": { "start": "={{ new Date().toISOString() }}" } },
+          "Status": { "select": { "name": "Sent" } }
+        }
+      },
+      "id": "notion-track",
+      "name": "Track Distribution",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#communication",
+        "text": ":newspaper: *Communiqué de presse distribué*\n\n*Titre:* {{ $('New Press Release').first().json.title }}\n*Contacts:* {{ $('Prepare Distribution').all().length }} journalistes\n\nDistribution complète. Suivi dans Notion."
+      },
+      "id": "slack-notify",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Press Release Distributor\n\n**Objectif:** Distribue les communiqués de presse personnalisés aux journalistes\n\n**Flow:**\n1. Webhook reçoit le communiqué\n2. Récupère les contacts presse depuis Notion\n3. Prépare la distribution pour chaque contact\n4. Personnalise l'accroche avec Claude\n5. Envoie l'email personnalisé\n6. Track dans Notion\n7. Notifie l'équipe\n\n**Webhook payload:**\n```json\n{\n  \"title\": \"Titre du communiqué\",\n  \"subtitle\": \"Sous-titre\",\n  \"body\": \"Corps du communiqué\",\n  \"quote\": \"Citation\",\n  \"quotePerson\": \"Nom de la personne\",\n  \"boilerplate\": \"À propos de...\",\n  \"contactInfo\": \"Contact presse\",\n  \"embargo\": \"2024-01-15T09:00:00Z\"\n}\n```\n\n**Credentials requis:**\n- Notion API\n- Anthropic API\n- SMTP\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "New Press Release": {
+      "main": [[{ "node": "Get Press Contacts", "type": "main", "index": 0 }]]
+    },
+    "Get Press Contacts": {
+      "main": [[{ "node": "Prepare Distribution", "type": "main", "index": 0 }]]
+    },
+    "Prepare Distribution": {
+      "main": [[{ "node": "Personalize for Journalist", "type": "main", "index": 0 }]]
+    },
+    "Personalize for Journalist": {
+      "main": [[{ "node": "Send Press Release", "type": "main", "index": 0 }]]
+    },
+    "Send Press Release": {
+      "main": [[{ "node": "Track Distribution", "type": "main", "index": 0 }]]
+    },
+    "Track Distribution": {
+      "main": [[{ "node": "Notify Team", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "communication" },
+    { "name": "pr" },
+    { "name": "press" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

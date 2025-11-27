@@ -1,0 +1,99 @@
+{
+  "name": "Project Status Sync",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 2 }]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every 2 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "databaseId": "={{ $env.NOTION_PROJECTS_DB }}",
+        "filterJson": "{ \"property\": \"Status\", \"select\": { \"does_not_equal\": \"Completed\" } }"
+      },
+      "id": "notion-projects",
+      "name": "Get Active Projects",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "resource": "task",
+        "operation": "getAll",
+        "projectId": "={{ $json.properties.Asana_ID?.rich_text?.[0]?.plain_text }}",
+        "returnAll": false,
+        "limit": 50
+      },
+      "id": "asana-tasks",
+      "name": "Get Asana Tasks",
+      "type": "n8n-nodes-base.asana",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "credentials": { "asanaApi": { "id": "asana-creds", "name": "Asana API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const tasks = $input.all().map(t => t.json);\nconst project = $('Get Active Projects').item.json;\n\nconst completed = tasks.filter(t => t.completed).length;\nconst total = tasks.length;\nconst progress = total > 0 ? Math.round((completed / total) * 100) : 0;\n\nconst overdue = tasks.filter(t => !t.completed && t.due_on && new Date(t.due_on) < new Date()).length;\n\nreturn [{\n  json: {\n    projectId: project.id,\n    projectName: project.properties.Name?.title?.[0]?.plain_text,\n    asanaId: project.properties.Asana_ID?.rich_text?.[0]?.plain_text,\n    stats: { total, completed, remaining: total - completed, progress, overdue },\n    needsUpdate: project.properties.Progress?.number !== progress\n  }\n}];"
+      },
+      "id": "calc-progress",
+      "name": "Calculate Progress",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [{ "leftValue": "={{ $json.needsUpdate }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }]
+        }
+      },
+      "id": "filter-updates",
+      "name": "Needs Update?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "pageId": "={{ $json.projectId }}",
+        "properties": {
+          "Progress": { "number": "={{ $json.stats.progress }}" },
+          "Tasks Completed": { "number": "={{ $json.stats.completed }}" },
+          "Tasks Total": { "number": "={{ $json.stats.total }}" },
+          "Overdue Tasks": { "number": "={{ $json.stats.overdue }}" },
+          "Last Sync": { "date": { "start": "={{ new Date().toISOString() }}" } }
+        }
+      },
+      "id": "notion-update",
+      "name": "Update Notion Project",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "content": "## Project Status Sync\n\n**Objectif:** Synchronise la progression des projets entre Asana et Notion\n\n**Flow:**\n1. Toutes les 2h\n2. Récupère projets actifs Notion\n3. Pour chaque projet: récupère tâches Asana\n4. Calcule progression et tâches en retard\n5. Met à jour Notion si changement\n\n**Credentials:** Notion API, Asana API" }
+    }
+  ],
+  "connections": {
+    "Every 2 Hours": { "main": [[{ "node": "Get Active Projects", "type": "main", "index": 0 }]] },
+    "Get Active Projects": { "main": [[{ "node": "Get Asana Tasks", "type": "main", "index": 0 }]] },
+    "Get Asana Tasks": { "main": [[{ "node": "Calculate Progress", "type": "main", "index": 0 }]] },
+    "Calculate Progress": { "main": [[{ "node": "Needs Update?", "type": "main", "index": 0 }]] },
+    "Needs Update?": { "main": [[{ "node": "Update Notion Project", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operations" }, { "name": "sync" }]
+}

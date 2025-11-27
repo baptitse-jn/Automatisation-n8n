@@ -1,0 +1,107 @@
+{
+  "name": "Meeting Notes Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-notes",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Meeting Recording",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.openai.com/v1/audio/transcriptions",
+        "method": "POST",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "file", "value": "={{ $json.audioUrl }}" },
+            { "name": "model", "value": "whisper-1" },
+            { "name": "language", "value": "fr" }
+          ]
+        }
+      },
+      "id": "transcribe",
+      "name": "Transcribe Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Analyse cette transcription de réunion et génère:\n\n{{ $json.text }}\n\nRetourne un JSON:\n{\n  \"summary\": \"Résumé en 3-5 phrases\",\n  \"keyDecisions\": [\"Décision 1\", ...],\n  \"actionItems\": [{\"task\": \"...\", \"owner\": \"...\", \"deadline\": \"...\"}],\n  \"topics\": [\"Topic 1\", ...],\n  \"participants\": [\"Nom 1\", ...],\n  \"nextSteps\": \"...\"\n}" }] },
+        "options": { "maxTokens": 2000 }
+      },
+      "id": "claude-analyze",
+      "name": "Analyze Meeting",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [650, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_MEETINGS_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "={{ $('New Meeting Recording').first().json.meetingTitle }}" } }] },
+          "Date": { "date": { "start": "={{ $('New Meeting Recording').first().json.date }}" } },
+          "Topics": { "multi_select": "={{ JSON.parse($json.message.content).topics.map(t => ({name: t})) }}" }
+        },
+        "blockContent": "={{ JSON.parse($json.message.content).summary }}"
+      },
+      "id": "notion-save",
+      "name": "Save to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = JSON.parse($('Analyze Meeting').first().json.message.content);\nreturn analysis.actionItems.map(item => ({ json: item }));"
+      },
+      "id": "extract-actions",
+      "name": "Extract Action Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "resource": "task",
+        "operation": "create",
+        "workspaceId": "={{ $env.ASANA_WORKSPACE }}",
+        "name": "={{ $json.task }}",
+        "projectIds": "={{ $env.ASANA_PROJECT }}",
+        "additionalFields": { "notes": "From meeting: {{ $('New Meeting Recording').first().json.meetingTitle }}", "dueOn": "={{ $json.deadline }}" }
+      },
+      "id": "asana-tasks",
+      "name": "Create Asana Tasks",
+      "type": "n8n-nodes-base.asana",
+      "typeVersion": 1,
+      "position": [1050, 450],
+      "credentials": { "asanaApi": { "id": "asana-creds", "name": "Asana API" } }
+    },
+    {
+      "parameters": { "content": "## Meeting Notes Processor\n\n**Objectif:** Transcrit, analyse et extrait les actions des réunions\n\n**Flow:**\n1. Webhook reçoit l'enregistrement\n2. Transcription Whisper\n3. Analyse Claude (résumé, décisions, actions)\n4. Sauvegarde Notion\n5. Crée tâches Asana pour chaque action\n\n**Credentials:** OpenAI, Anthropic, Notion, Asana" }
+    }
+  ],
+  "connections": {
+    "New Meeting Recording": { "main": [[{ "node": "Transcribe Audio", "type": "main", "index": 0 }]] },
+    "Transcribe Audio": { "main": [[{ "node": "Analyze Meeting", "type": "main", "index": 0 }]] },
+    "Analyze Meeting": { "main": [[{ "node": "Save to Notion", "type": "main", "index": 0 }, { "node": "Extract Action Items", "type": "main", "index": 0 }]] },
+    "Extract Action Items": { "main": [[{ "node": "Create Asana Tasks", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operations" }, { "name": "meetings" }, { "name": "ai" }]
+}

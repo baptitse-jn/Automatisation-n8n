@@ -1,0 +1,51 @@
+{
+  "name": "Content Repurposer",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "repurpose-content", "options": {} },
+      "id": "webhook", "name": "Content to Repurpose", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un expert en content marketing. Adapte ce contenu pour plusieurs formats.\n\nContenu source:\nTitre: {{ $json.title }}\nContenu: {{ $json.content }}\n\nGénère un JSON avec ces adaptations:\n{\n  \"linkedin\": {\n    \"post\": \"Post LinkedIn (1300 car max, professionnel)\",\n    \"carousel_slides\": [\"Slide 1\", \"Slide 2\", ...]\n  },\n  \"twitter\": {\n    \"thread\": [\"Tweet 1\", \"Tweet 2\", ...],\n    \"single\": \"Tweet unique avec hook\"\n  },\n  \"email\": {\n    \"subject\": \"Objet email\",\n    \"preview\": \"Preview text\",\n    \"body\": \"Corps de l'email\"\n  },\n  \"blog\": {\n    \"title\": \"Titre SEO optimisé\",\n    \"metaDescription\": \"Meta description\",\n    \"outline\": [\"H2 1\", \"H2 2\"]\n  },\n  \"video\": {\n    \"script\": \"Script vidéo 60 secondes\",\n    \"hooks\": [\"Hook 1\", \"Hook 2\"]\n  }\n}" }] },
+        "options": { "maxTokens": 3000 }
+      },
+      "id": "claude-repurpose", "name": "Repurpose Content", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [450, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Content to Repurpose').first().json;\nconst adaptations = JSON.parse($input.first().json.message.content);\n\nreturn [{ json: { source: { title: source.title, type: source.type }, adaptations, generatedAt: new Date().toISOString() } }];"
+      },
+      "id": "parse-output", "name": "Parse Output", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_CONTENT_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "[Repurposed] {{ $json.source.title }}" } }] },
+          "Source Type": { "select": { "name": "={{ $json.source.type }}" } },
+          "Formats Generated": { "number": 5 },
+          "Status": { "select": { "name": "Draft" } }
+        },
+        "blockContent": "## LinkedIn\\n{{ $json.adaptations.linkedin.post }}\\n\\n## Twitter Thread\\n{{ $json.adaptations.twitter.thread.join('\\n\\n') }}\\n\\n## Email\\n**Sujet:** {{ $json.adaptations.email.subject }}\\n{{ $json.adaptations.email.body }}\\n\\n## Video Script\\n{{ $json.adaptations.video.script }}"
+      },
+      "id": "notion-save", "name": "Save All Versions", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "#content", "text": ":recycle: *Contenu repurposé*\n\n*{{ $json.source.title }}*\n\nFormats générés:\n• LinkedIn post + carousel\n• Twitter thread\n• Email newsletter\n• Blog outline\n• Video script\n\nDisponible dans Notion pour review." },
+      "id": "slack-notify", "name": "Notify Team", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Content to Repurpose": { "main": [[{ "node": "Repurpose Content", "type": "main", "index": 0 }]] },
+    "Repurpose Content": { "main": [[{ "node": "Parse Output", "type": "main", "index": 0 }]] },
+    "Parse Output": { "main": [[{ "node": "Save All Versions", "type": "main", "index": 0 }]] },
+    "Save All Versions": { "main": [[{ "node": "Notify Team", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "ai-agents" }, { "name": "content" }]
+}

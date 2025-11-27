@@ -1,0 +1,181 @@
+{
+  "name": "Crisis Communication Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crisis-alert",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Crisis Alert Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "crisis-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const alert = $input.first().json;\n\nconst severityConfig = {\n  'critical': {\n    emoji: ':rotating_light:',\n    color: '#e74c3c',\n    escalation: ['ceo', 'cto', 'legal', 'communication'],\n    channels: ['#crisis-team', '#leadership'],\n    smsRequired: true\n  },\n  'high': {\n    emoji: ':warning:',\n    color: '#e67e22',\n    escalation: ['cto', 'communication'],\n    channels: ['#crisis-team'],\n    smsRequired: true\n  },\n  'medium': {\n    emoji: ':large_orange_diamond:',\n    color: '#f1c40f',\n    escalation: ['communication'],\n    channels: ['#communication'],\n    smsRequired: false\n  },\n  'low': {\n    emoji: ':information_source:',\n    color: '#3498db',\n    escalation: [],\n    channels: ['#communication'],\n    smsRequired: false\n  }\n};\n\nconst config = severityConfig[alert.severity] || severityConfig.medium;\n\nreturn [{\n  json: {\n    id: `CRISIS-${Date.now()}`,\n    title: alert.title,\n    description: alert.description,\n    severity: alert.severity,\n    config,\n    source: alert.source || 'Manual',\n    impactedAreas: alert.impactedAreas || [],\n    reporter: alert.reporter || 'System',\n    createdAt: new Date().toISOString(),\n    status: 'active'\n  }\n}];"
+      },
+      "id": "prepare-alert",
+      "name": "Prepare Crisis Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.config.channels[0] }}",
+        "text": "{{ $json.config.emoji }} *ALERTE CRISE - {{ $json.severity.toUpperCase() }}*\n\n*ID:* {{ $json.id }}\n*{{ $json.title }}*\n\n{{ $json.description }}\n\n*Source:* {{ $json.source }}\n*Zones impactées:* {{ $json.impactedAreas.join(', ') || 'À déterminer' }}\n*Rapporté par:* {{ $json.reporter }}\n*Heure:* {{ new Date($json.createdAt).toLocaleString('fr-FR') }}\n\n<!channel> Action immédiate requise!",
+        "attachments": [],
+        "otherOptions": {}
+      },
+      "id": "slack-crisis",
+      "name": "Alert Crisis Channel",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [700, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "databaseId": "={{ $env.NOTION_CRISIS_CONTACTS_DB }}",
+        "filterJson": "{\n  \"or\": [\n    {{ $json.config.escalation.map(role => `{\"property\": \"Role\", \"select\": {\"equals\": \"${role}\"}}`).join(',') }}\n  ]\n}"
+      },
+      "id": "get-escalation",
+      "name": "Get Escalation Contacts",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [700, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "crisis@mywai.fr",
+        "toEmail": "={{ $json.properties.Email.email }}",
+        "subject": "[URGENT] Alerte Crise: {{ $('Prepare Crisis Alert').first().json.title }}",
+        "html": "<div style=\"font-family: Arial; border: 3px solid {{ $('Prepare Crisis Alert').first().json.config.color }}; padding: 20px;\">\n  <h1 style=\"color: {{ $('Prepare Crisis Alert').first().json.config.color }};\">{{ $('Prepare Crisis Alert').first().json.config.emoji }} ALERTE CRISE</h1>\n  \n  <p><strong>Sévérité:</strong> {{ $('Prepare Crisis Alert').first().json.severity.toUpperCase() }}</p>\n  <p><strong>ID:</strong> {{ $('Prepare Crisis Alert').first().json.id }}</p>\n  \n  <h2>{{ $('Prepare Crisis Alert').first().json.title }}</h2>\n  <p>{{ $('Prepare Crisis Alert').first().json.description }}</p>\n  \n  <p><strong>Action requise immédiatement.</strong></p>\n  <p>Rejoignez le channel Slack #crisis-team.</p>\n</div>",
+        "options": {
+          "priority": "high"
+        }
+      },
+      "id": "send-escalation",
+      "name": "Send Escalation Emails",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [950, 400],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_CRISIS_LOG_DB }}",
+        "properties": {
+          "ID": { "title": [{ "text": { "content": "={{ $json.id }}" } }] },
+          "Title": { "rich_text": [{ "text": { "content": "={{ $json.title }}" } }] },
+          "Severity": { "select": { "name": "={{ $json.severity }}" } },
+          "Status": { "select": { "name": "Active" } },
+          "Reporter": { "rich_text": [{ "text": { "content": "={{ $json.reporter }}" } }] },
+          "Created At": { "date": { "start": "={{ $json.createdAt }}" } }
+        },
+        "blockContent": "={{ $json.description }}"
+      },
+      "id": "notion-log",
+      "name": "Log Crisis Event",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [700, 550],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "event",
+        "operation": "create",
+        "calendarId": "={{ $env.CRISIS_CALENDAR_ID }}",
+        "summary": "[CRISE] {{ $json.title }}",
+        "description": "{{ $json.description }}\\n\\nID: {{ $json.id }}\\nSévérité: {{ $json.severity }}",
+        "start": "={{ $json.createdAt }}",
+        "end": "={{ new Date(new Date($json.createdAt).getTime() + 2 * 60 * 60 * 1000).toISOString() }}",
+        "additionalFields": {
+          "colorId": "={{ $json.severity === 'critical' ? '11' : '6' }}"
+        }
+      },
+      "id": "gcal-event",
+      "name": "Create Crisis Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [950, 200],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "gcal-creds",
+          "name": "Google Calendar OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Crisis Communication Alert\n\n**Objectif:** Système d'alerte de crise avec escalade automatique\n\n**Flow:**\n1. Webhook reçoit l'alerte de crise\n2. Prépare l'alerte selon sévérité\n3. Alerte channel Slack crise (parallèle)\n4. Récupère contacts d'escalade (parallèle)\n5. Envoie emails d'escalade\n6. Log dans Notion\n7. Crée événement calendrier\n\n**Niveaux de sévérité:**\n- Critical: CEO, CTO, Legal, Com + SMS\n- High: CTO, Com + SMS\n- Medium: Com uniquement\n- Low: Notification simple\n\n**Webhook payload:**\n```json\n{\n  \"title\": \"Titre de la crise\",\n  \"description\": \"Description détaillée\",\n  \"severity\": \"critical|high|medium|low\",\n  \"source\": \"Monitoring|Customer|Media\",\n  \"impactedAreas\": [\"Production\", \"API\"],\n  \"reporter\": \"System/Nom\"\n}\n```\n\n**Credentials requis:**\n- Slack API\n- Notion API\n- SMTP\n- Google Calendar OAuth2"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Crisis Alert Trigger": {
+      "main": [[{ "node": "Prepare Crisis Alert", "type": "main", "index": 0 }]]
+    },
+    "Prepare Crisis Alert": {
+      "main": [
+        [
+          { "node": "Alert Crisis Channel", "type": "main", "index": 0 },
+          { "node": "Get Escalation Contacts", "type": "main", "index": 0 },
+          { "node": "Log Crisis Event", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Alert Crisis Channel": {
+      "main": [[{ "node": "Create Crisis Event", "type": "main", "index": 0 }]]
+    },
+    "Get Escalation Contacts": {
+      "main": [[{ "node": "Send Escalation Emails", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "communication" },
+    { "name": "internal" },
+    { "name": "crisis" },
+    { "name": "emergency" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

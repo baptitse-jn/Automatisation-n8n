@@ -1,0 +1,84 @@
+{
+  "name": "Inventory Alert System",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "days", "triggerAtHour": 8 }] }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "databaseId": "={{ $env.NOTION_INVENTORY_DB }}",
+        "filterJson": "{ \"property\": \"Stock\", \"number\": { \"less_than_or_equal_to\": 10 } }"
+      },
+      "id": "notion-low-stock",
+      "name": "Get Low Stock Items",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\n\nconst alerts = items.map(item => ({\n  name: item.properties.Name?.title?.[0]?.plain_text,\n  sku: item.properties.SKU?.rich_text?.[0]?.plain_text,\n  currentStock: item.properties.Stock?.number,\n  minStock: item.properties.Min_Stock?.number || 10,\n  supplier: item.properties.Supplier?.select?.name,\n  critical: item.properties.Stock?.number <= 5\n}));\n\nconst critical = alerts.filter(a => a.critical);\nconst warning = alerts.filter(a => !a.critical);\n\nreturn [{ json: { alerts, critical, warning, total: alerts.length } }];"
+      },
+      "id": "process-alerts",
+      "name": "Process Stock Alerts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": { "conditions": [{ "leftValue": "={{ $json.critical.length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }] }
+      },
+      "id": "has-critical",
+      "name": "Has Critical?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "channel": "#operations",
+        "text": ":rotating_light: *ALERTE STOCK CRITIQUE*\n\n{{ $json.critical.map(i => `• *${i.name}* (${i.sku}): ${i.currentStock} unités`).join('\\n') }}\n\nCommande urgente requise!"
+      },
+      "id": "slack-critical",
+      "name": "Critical Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1050, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "channel": "#operations",
+        "text": ":warning: *Rapport Stock Bas - {{ new Date().toLocaleDateString('fr-FR') }}*\n\n*{{ $json.total }} articles* en stock bas\n\n{{ $json.warning.map(i => `• ${i.name}: ${i.currentStock}/${i.minStock}`).join('\\n') }}"
+      },
+      "id": "slack-daily",
+      "name": "Daily Report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [850, 400],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": { "content": "## Inventory Alert System\n\n**Objectif:** Alerte sur les stocks bas et critiques\n\n**Flow:**\n1. Check quotidien 8h\n2. Récupère articles stock <= 10\n3. Sépare critiques (<= 5) et warnings\n4. Si critique → Alerte urgente\n5. Rapport quotidien\n\n**Credentials:** Notion API, Slack API" }
+    }
+  ],
+  "connections": {
+    "Daily 8h": { "main": [[{ "node": "Get Low Stock Items", "type": "main", "index": 0 }]] },
+    "Get Low Stock Items": { "main": [[{ "node": "Process Stock Alerts", "type": "main", "index": 0 }]] },
+    "Process Stock Alerts": { "main": [[{ "node": "Has Critical?", "type": "main", "index": 0 }, { "node": "Daily Report", "type": "main", "index": 0 }]] },
+    "Has Critical?": { "main": [[{ "node": "Critical Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operations" }, { "name": "inventory" }, { "name": "alert" }]
+}
