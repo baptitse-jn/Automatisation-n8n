@@ -1,0 +1,172 @@
+{
+  "id": "ai-agent-multi-tools-2024",
+  "meta": {
+    "instanceId": "n8n-workflow-template-ai-agent-multi-tools"
+  },
+  "name": "🤖 Agent IA Multi-Outils avec Mémoire",
+  "tags": ["ai-agent", "openai", "tools", "memory", "chat"],
+  "nodes": [
+    {
+      "id": "chat-trigger-001",
+      "name": "Réception Message Chat",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [-280, 300],
+      "webhookId": "ai-agent-chat-trigger-001",
+      "parameters": {
+        "public": true,
+        "initialMessages": "=Bonjour ! Je suis votre assistant IA multi-outils. Je peux vous aider avec :\n\n🕐 **Heure et Date** - Obtenir l'heure actuelle dans différents fuseaux horaires\n🔢 **Calculs** - Effectuer des opérations mathématiques\n🌐 **Recherche Web** - Rechercher des informations sur internet\n📝 **Résumés** - Résumer du texte ou des documents\n\nComment puis-je vous aider aujourd'hui ?",
+        "options": {
+          "title": "Assistant IA Multi-Outils",
+          "subtitle": "Propulsé par n8n et OpenAI",
+          "inputPlaceholder": "Tapez votre message ici...",
+          "loadPreviousSession": "memory"
+        }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "ai-agent-001",
+      "name": "Agent IA Principal",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [300, 300],
+      "parameters": {
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "=Tu es un assistant IA polyvalent et serviable, conçu pour aider les utilisateurs avec diverses tâches.\n\nDate et heure actuelles: {{ DateTime.local().toFormat('cccc d LLLL yyyy HH:mm:ss') }}\n\n## Tes Capacités:\n1. **Outil Heure/Date**: Obtenir l'heure actuelle dans différents fuseaux horaires\n2. **Outil Calculatrice**: Effectuer des calculs mathématiques complexes\n3. **Outil Code**: Exécuter du code JavaScript pour des tâches avancées\n4. **Outil HTTP**: Faire des requêtes vers des APIs externes\n\n## Directives de Comportement:\n- Réponds TOUJOURS dans la langue de l'utilisateur (français si le message est en français)\n- Sois concis mais complet dans tes réponses\n- Utilise les outils appropriés quand c'est nécessaire\n- Si tu n'es pas sûr, demande des clarifications\n- Formate tes réponses de manière claire avec des emojis pertinents\n\n## Gestion des Erreurs:\n- Si un outil échoue, explique le problème à l'utilisateur\n- Propose des alternatives quand c'est possible\n- Ne jamais inventer des données - utilise les outils pour obtenir des informations réelles\n\n## Format de Réponse:\n- Utilise des listes à puces pour les informations multiples\n- Mets en gras les informations importantes\n- Ajoute des séparateurs visuels pour la lisibilité",
+          "maxIterations": 10,
+          "returnIntermediateSteps": false
+        },
+        "promptType": "define"
+      },
+      "typeVersion": 1.7
+    },
+    {
+      "id": "openai-model-001",
+      "name": "Modèle OpenAI GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [100, 520],
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 4096,
+          "timeout": 60000
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "votre-credential-id",
+          "name": "OpenAI API"
+        }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "memory-buffer-001",
+      "name": "Mémoire Conversation",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [300, 520],
+      "parameters": {
+        "sessionKey": "={{ $('Réception Message Chat').item.json.sessionId }}",
+        "sessionIdType": "customKey",
+        "contextWindowLength": 20
+      },
+      "typeVersion": 1.3
+    },
+    {
+      "id": "tool-datetime-001",
+      "name": "Outil Heure et Date",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "position": [500, 520],
+      "parameters": {
+        "name": "get_current_datetime",
+        "description": "Obtient la date et l'heure actuelles. Peut aussi convertir vers différents fuseaux horaires si spécifié. Paramètres: timezone (optionnel) - ex: 'Europe/Paris', 'America/New_York', 'Asia/Tokyo'",
+        "jsCode": "try {\n  const timezone = $input?.timezone || 'Europe/Paris';\n  const now = new Date();\n  \n  const options = {\n    timeZone: timezone,\n    weekday: 'long',\n    year: 'numeric',\n    month: 'long',\n    day: 'numeric',\n    hour: '2-digit',\n    minute: '2-digit',\n    second: '2-digit',\n    hour12: false\n  };\n  \n  const formattedDate = now.toLocaleDateString('fr-FR', options);\n  const formattedTime = now.toLocaleTimeString('fr-FR', { timeZone: timezone, hour12: false });\n  \n  return {\n    timezone: timezone,\n    date_complete: formattedDate,\n    heure: formattedTime,\n    timestamp_unix: Math.floor(now.getTime() / 1000),\n    iso_8601: now.toISOString(),\n    jour_semaine: now.toLocaleDateString('fr-FR', { timeZone: timezone, weekday: 'long' }),\n    jour: now.toLocaleDateString('fr-FR', { timeZone: timezone, day: 'numeric' }),\n    mois: now.toLocaleDateString('fr-FR', { timeZone: timezone, month: 'long' }),\n    annee: now.toLocaleDateString('fr-FR', { timeZone: timezone, year: 'numeric' })\n  };\n} catch (error) {\n  return {\n    erreur: true,\n    message: `Erreur lors de l'obtention de l'heure: ${error.message}`,\n    timezone_demande: $input?.timezone || 'non spécifié'\n  };\n}"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "tool-calculator-001",
+      "name": "Outil Calculatrice",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "position": [700, 520],
+      "parameters": {
+        "name": "calculator",
+        "description": "Effectue des calculs mathématiques. Supporte: addition, soustraction, multiplication, division, puissance, racine carrée, pourcentage, et fonctions trigonométriques.",
+        "jsCode": "try {\n  let expression = $input?.expression || '';\n  if (!expression) { return { erreur: true, message: 'Aucune expression fournie' }; }\n  expression = expression.replace(/sqrt\\(/g, 'Math.sqrt(').replace(/pow\\(/g, 'Math.pow(').replace(/sin\\(/g, 'Math.sin(').replace(/cos\\(/g, 'Math.cos(').replace(/tan\\(/g, 'Math.tan(').replace(/log\\(/g, 'Math.log10(').replace(/ln\\(/g, 'Math.log(').replace(/abs\\(/g, 'Math.abs(').replace(/floor\\(/g, 'Math.floor(').replace(/ceil\\(/g, 'Math.ceil(').replace(/round\\(/g, 'Math.round(').replace(/pi/gi, 'Math.PI').replace(/\\^/g, '**');\n  const resultat = eval(expression);\n  return { expression_originale: $input.expression, resultat: resultat, resultat_arrondi: Math.round(resultat * 1000000) / 1000000 };\n} catch (error) { return { erreur: true, message: `Erreur de calcul: ${error.message}` }; }"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "tool-http-001",
+      "name": "Outil Requête HTTP",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [900, 520],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $fromAI('url', 'URL de l\\'API à appeler') }}",
+        "descriptionType": "manual",
+        "toolDescription": "Effectue des requêtes HTTP vers des APIs externes.",
+        "options": { "timeout": 30000 }
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "tool-text-analyzer-001",
+      "name": "Outil Analyse Texte",
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "position": [700, 700],
+      "parameters": {
+        "name": "text_analyzer",
+        "description": "Analyse un texte et retourne des statistiques.",
+        "jsCode": "try {\n  const text = $input?.text || '';\n  if (!text) { return { erreur: true, message: 'Aucun texte fourni' }; }\n  const mots = text.trim().split(/\\s+/).filter(m => m.length > 0);\n  const phrases = text.split(/[.!?]+/).filter(p => p.trim().length > 0);\n  return { nombre_mots: mots.length, nombre_caracteres: text.length, nombre_phrases: phrases.length, temps_lecture_minutes: Math.ceil(mots.length / 200) };\n} catch (error) { return { erreur: true, message: error.message }; }"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "format-response-001",
+      "name": "Formater Réponse",
+      "type": "n8n-nodes-base.set",
+      "position": [580, 300],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            { "id": "output", "name": "output", "type": "string", "value": "={{ $json.output }}" },
+            { "id": "sessionId", "name": "sessionId", "type": "string", "value": "={{ $('Réception Message Chat').item.json.sessionId }}" }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+    {
+      "id": "sticky-note-intro",
+      "name": "Note - Introduction",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-500, 100],
+      "parameters": {
+        "color": 7,
+        "width": 400,
+        "height": 400,
+        "content": "# 🤖 Agent IA Multi-Outils\n\n## Description\nCe workflow implémente un agent IA conversationnel avec plusieurs outils.\n\n## Outils Disponibles\n1. Heure/Date - Fuseaux horaires\n2. Calculatrice - Opérations mathématiques\n3. Requêtes HTTP - APIs externes\n4. Analyse de texte - Statistiques\n\n## Configuration\n- Clé API OpenAI requise\n- n8n version 1.0+"
+      },
+      "typeVersion": 1
+    }
+  ],
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "timezone": "Europe/Paris",
+    "executionOrder": "v1"
+  },
+  "connections": {
+    "Réception Message Chat": { "main": [[{ "node": "Agent IA Principal", "type": "main", "index": 0 }]] },
+    "Agent IA Principal": { "main": [[{ "node": "Formater Réponse", "type": "main", "index": 0 }]] },
+    "Modèle OpenAI GPT-4o": { "ai_languageModel": [[{ "node": "Agent IA Principal", "type": "ai_languageModel", "index": 0 }]] },
+    "Mémoire Conversation": { "ai_memory": [[{ "node": "Agent IA Principal", "type": "ai_memory", "index": 0 }]] },
+    "Outil Heure et Date": { "ai_tool": [[{ "node": "Agent IA Principal", "type": "ai_tool", "index": 0 }]] },
+    "Outil Calculatrice": { "ai_tool": [[{ "node": "Agent IA Principal", "type": "ai_tool", "index": 0 }]] },
+    "Outil Requête HTTP": { "ai_tool": [[{ "node": "Agent IA Principal", "type": "ai_tool", "index": 0 }]] },
+    "Outil Analyse Texte": { "ai_tool": [[{ "node": "Agent IA Principal", "type": "ai_tool", "index": 0 }]] }
+  }
+}
