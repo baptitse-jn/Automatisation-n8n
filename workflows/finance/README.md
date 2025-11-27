@@ -15,6 +15,11 @@ Workflows d'automatisation pour la gestion financière.
 | Workflow | Description | Trigger | Intégrations |
 |----------|-------------|---------|--------------|
 | [Expense Tracker AI Agent](./expense-tracking/Expense_Tracker_AI_Agent.json) | Agent IA pour suivi des dépenses | Manuel | Claude |
+| [Invoice Generator](./invoicing/Invoice_Generator.json) | Génération automatique de factures | Webhook | Notion, Claude, Google Docs, Email |
+| [Payment Reminder Sequence](./invoicing/Payment_Reminder_Sequence.json) | Séquence de relance de paiement | Schedule (quotidien) | Notion, Claude, Email, Slack |
+| [Expense Categorizer](./expense-tracking/Expense_Categorizer.json) | Catégorisation automatique des dépenses | Webhook | Claude, Notion, Slack |
+| [Monthly Financial Report](./reporting/Monthly_Financial_Report.json) | Rapport financier mensuel automatisé | Schedule (1er du mois) | Notion, Claude, Google Sheets, Slack |
+| [Budget Alert Monitor](./reporting/Budget_Alert_Monitor.json) | Surveillance et alertes budgétaires | Schedule (quotidien) | Notion, Claude, Slack, Email |
 
 ## Intégrations courantes
 

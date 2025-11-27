@@ -15,7 +15,11 @@ Workflows d'automatisation pour les équipes commerciales et ventes.
 
 | Workflow | Description | Trigger | Intégrations |
 |----------|-------------|---------|--------------|
-| *À venir* | - | - | - |
+| [Lead Enrichment Pipeline](./lead-generation/Lead_Enrichment_Pipeline.json) | Pipeline d'enrichissement et scoring de leads | Webhook | Apollo, Clearbit, HubSpot, Slack |
+| [Follow Up Sequence Automation](./prospection/Follow_Up_Sequence_Automation.json) | Séquence de relance automatique | Schedule (quotidien) | HubSpot, Claude, Gmail, Slack |
+| [Proposal Generator](./prospection/Proposal_Generator.json) | Génération automatique de propositions commerciales | Webhook | Notion, Claude, Google Docs, Gmail |
+| [Meeting Scheduler Bot](./crm/Meeting_Scheduler_Bot.json) | Bot de prise de rendez-vous automatique | Webhook | HubSpot, Google Calendar, Gmail, Slack |
+| [Deal Stage Notifier](./sales-pipeline/Deal_Stage_Notifier.json) | Notifications automatiques sur changement de pipeline | Schedule (horaire) | HubSpot, Claude, Slack, Notion |
 
 ## Intégrations courantes
 

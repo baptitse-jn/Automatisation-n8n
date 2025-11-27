@@ -14,7 +14,11 @@ Workflows d'automatisation pour la gestion RH.
 
 | Workflow | Description | Trigger | Intégrations |
 |----------|-------------|---------|--------------|
-| *À venir* | - | - | - |
+| [CV Screening AI](./recruitment/CV_Screening_AI.json) | Analyse et scoring automatique de CV | Webhook | Claude, Notion, Gmail, Slack |
+| [Interview Scheduler](./recruitment/Interview_Scheduler.json) | Planification automatique d'entretiens | Webhook | Notion, Google Calendar, Gmail, Slack |
+| [Onboarding Checklist Creator](./onboarding/Onboarding_Checklist_Creator.json) | Génération automatique de checklist d'onboarding | Webhook | Notion, Google Workspace, Slack |
+| [Leave Request Handler](./employee-management/Leave_Request_Handler.json) | Traitement automatique des demandes de congés | Webhook | Notion, Google Calendar, Slack, Email |
+| [Performance Review Reminder](./employee-management/Performance_Review_Reminder.json) | Rappels automatiques pour les évaluations | Schedule (mensuel) | Notion, Gmail, Slack, Google Calendar |
 
 ## Intégrations courantes
 

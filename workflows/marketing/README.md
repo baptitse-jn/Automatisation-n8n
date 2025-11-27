@@ -16,7 +16,11 @@ Workflows d'automatisation pour les opérations marketing.
 
 | Workflow | Description | Trigger | Intégrations |
 |----------|-------------|---------|--------------|
-| *À venir* | - | - | - |
+| [Newsletter Weekly Automation](./email-automation/Newsletter_Weekly_Automation.json) | Génération automatique de newsletter hebdomadaire | Schedule (Lundi 8h) | Feedly, Claude, Mailchimp, Slack |
+| [Lead Magnet Delivery](./email-automation/Lead_Magnet_Delivery.json) | Livraison automatique de lead magnets | Webhook | Notion, Gmail, Slack |
+| [Social Media Post Scheduler](./social-media/Social_Media_Post_Scheduler.json) | Planification et publication sur les réseaux sociaux | Schedule (quotidien) | Claude, Buffer, Notion, Slack |
+| [SEO Content Generator](./seo/SEO_Content_Generator.json) | Génération de contenu optimisé SEO | Schedule (hebdo) | Google Search Console, Brave Search, Claude, Notion |
+| [Campaign Performance Report](./analytics/Campaign_Performance_Report.json) | Rapport de performance des campagnes marketing | Schedule (Lundi 9h) | Google Analytics, HubSpot, Claude, Notion, Slack |
 
 ## Intégrations courantes
 
