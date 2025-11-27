@@ -15,6 +15,11 @@ Agents IA transversaux utilisables dans différents contextes métier.
 | Workflow | Description | Trigger | Intégrations |
 |----------|-------------|---------|--------------|
 | [AI Agent Multi Tools FR](./multi-tools/AI_Agent_Multi_Tools_FR.json) | Agent multi-outils en français | Manuel | Claude, Multiple tools |
+| [Research Assistant Agent](./research/Research_Assistant_Agent.json) | Agent de recherche web avancé | Webhook | Brave Search, Claude, Notion |
+| [Data Analyst Agent](./research/Data_Analyst_Agent.json) | Agent d'analyse de données | Webhook | Claude, Google Sheets, Notion, Slack |
+| [Code Review Agent](./research/Code_Review_Agent.json) | Agent de revue de code automatisée | Webhook | GitHub, Claude, Notion, Slack |
+| [Meeting Prep Agent](./research/Meeting_Prep_Agent.json) | Agent de préparation de réunion | Webhook | Google Calendar, Claude, Notion, Slack |
+| [Content Repurposer](./content-generation/Content_Repurposer.json) | Agent de transformation de contenu multi-format | Webhook | Claude, Notion, Buffer |
 
 ## Stack IA recommandée
 

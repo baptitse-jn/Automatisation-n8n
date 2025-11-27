@@ -1,0 +1,180 @@
+{
+  "name": "Lead Magnet Delivery",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-magnet",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Form Submission",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "lead-magnet-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\n// Validation\nif (!data.email || !data.email.includes('@')) {\n  throw new Error('Email invalide');\n}\n\nreturn [{\n  json: {\n    email: data.email.toLowerCase().trim(),\n    firstName: data.firstName || data.email.split('@')[0],\n    lastName: data.lastName || '',\n    leadMagnet: data.leadMagnet || 'default-guide',\n    source: data.source || 'website',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "validate-data",
+      "name": "Validate & Clean Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.firstName }}",
+          "lastName": "={{ $json.lastName }}",
+          "customFields": {
+            "lead_magnet": "={{ $json.leadMagnet }}",
+            "lead_source": "={{ $json.source }}"
+          }
+        }
+      },
+      "id": "hubspot-contact",
+      "name": "Create/Update HubSpot Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [650, 200],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "listEntry",
+        "operation": "add",
+        "listId": "={{ $env.MAILCHIMP_LEADS_LIST }}",
+        "email": "={{ $json.email }}",
+        "options": {
+          "mergeFields": {
+            "FNAME": "={{ $json.firstName }}",
+            "LNAME": "={{ $json.lastName }}",
+            "LEAD_SRC": "={{ $json.leadMagnet }}"
+          },
+          "tags": ["lead-magnet", "={{ $json.leadMagnet }}"]
+        }
+      },
+      "id": "mailchimp-add",
+      "name": "Add to Mailchimp List",
+      "type": "n8n-nodes-base.mailchimp",
+      "typeVersion": 1,
+      "position": [650, 400],
+      "credentials": {
+        "mailchimpApi": {
+          "id": "mailchimp-creds",
+          "name": "Mailchimp API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "query",
+        "databaseId": "={{ $env.NOTION_LEADMAGNETS_DB }}",
+        "filterJson": "{\n  \"property\": \"Slug\",\n  \"rich_text\": {\n    \"equals\": \"{{ $json.leadMagnet }}\"\n  }\n}"
+      },
+      "id": "notion-get-pdf",
+      "name": "Get Lead Magnet Info",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [850, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "contact@mywai.fr",
+        "toEmail": "={{ $('Validate & Clean Data').first().json.email }}",
+        "subject": "Votre guide est prêt : {{ $json.properties.Name.title[0].plain_text }}",
+        "html": "<h1>Bonjour {{ $('Validate & Clean Data').first().json.firstName }},</h1>\n<p>Merci pour votre intérêt !</p>\n<p>Voici votre guide : <a href=\"{{ $json.properties.PDF_URL.url }}\">Télécharger le PDF</a></p>\n<p>N'hésitez pas à répondre à cet email si vous avez des questions.</p>\n<p>À bientôt,<br>L'équipe MyWai</p>",
+        "options": {
+          "replyTo": "contact@mywai.fr"
+        }
+      },
+      "id": "send-email",
+      "name": "Send Lead Magnet Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1050, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#leads",
+        "text": ":magnet: Nouveau lead magnet téléchargé!\n\n*Email:* {{ $('Validate & Clean Data').first().json.email }}\n*Lead Magnet:* {{ $('Validate & Clean Data').first().json.leadMagnet }}\n*Source:* {{ $('Validate & Clean Data').first().json.source }}"
+      },
+      "id": "slack-notify",
+      "name": "Notify Sales",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Lead Magnet Delivery\n\n**Objectif:** Automatise la livraison de lead magnets et l'ajout au CRM\n\n**Flow:**\n1. Webhook reçoit la soumission formulaire\n2. Valide et nettoie les données\n3. Crée/update contact HubSpot (parallèle)\n4. Ajoute à liste Mailchimp (parallèle)\n5. Récupère infos du lead magnet dans Notion\n6. Envoie email avec le PDF\n7. Notifie l'équipe sales\n\n**Webhook payload:**\n```json\n{\n  \"email\": \"john@example.com\",\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"leadMagnet\": \"guide-automatisation\",\n  \"source\": \"blog-article\"\n}\n```\n\n**Credentials requis:**\n- HubSpot API\n- Mailchimp API\n- Notion API\n- SMTP\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Form Submission": {
+      "main": [[{ "node": "Validate & Clean Data", "type": "main", "index": 0 }]]
+    },
+    "Validate & Clean Data": {
+      "main": [
+        [
+          { "node": "Create/Update HubSpot Contact", "type": "main", "index": 0 },
+          { "node": "Add to Mailchimp List", "type": "main", "index": 0 },
+          { "node": "Get Lead Magnet Info", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get Lead Magnet Info": {
+      "main": [[{ "node": "Send Lead Magnet Email", "type": "main", "index": 0 }]]
+    },
+    "Send Lead Magnet Email": {
+      "main": [[{ "node": "Notify Sales", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "marketing" },
+    { "name": "lead-generation" },
+    { "name": "email" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

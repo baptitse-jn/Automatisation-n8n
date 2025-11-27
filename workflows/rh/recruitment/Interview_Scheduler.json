@@ -1,0 +1,49 @@
+{
+  "name": "Interview Scheduler",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "schedule-interview", "options": {} },
+      "id": "webhook", "name": "Schedule Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "calendar", "operation": "getAll", "calendarId": "={{ $json.interviewerEmail }}", "returnAll": false, "limit": 100,
+        "options": { "timeMin": "={{ new Date().toISOString() }}", "timeMax": "={{ new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString() }}" }
+      },
+      "id": "get-availability", "name": "Get Interviewer Calendar", "type": "n8n-nodes-base.googleCalendar", "typeVersion": 1.2, "position": [450, 300],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "gcal-creds", "name": "Google Calendar OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = $input.all().map(e => e.json);\nconst request = $('Schedule Request').first().json;\nconst duration = request.duration || 60;\n\nconst slots = [];\nfor (let d = 1; d <= 14; d++) {\n  const date = new Date();\n  date.setDate(date.getDate() + d);\n  if (date.getDay() === 0 || date.getDay() === 6) continue;\n  \n  for (let h = 9; h <= 17; h++) {\n    const start = new Date(date); start.setHours(h, 0, 0, 0);\n    const end = new Date(start); end.setMinutes(end.getMinutes() + duration);\n    \n    const isFree = !events.some(e => {\n      const es = new Date(e.start?.dateTime || e.start?.date);\n      const ee = new Date(e.end?.dateTime || e.end?.date);\n      return start < ee && end > es;\n    });\n    \n    if (isFree) slots.push({ start: start.toISOString(), end: end.toISOString(), display: start.toLocaleString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) });\n  }\n}\n\nreturn [{ json: { slots: slots.slice(0, 5), request } }];"
+      },
+      "id": "find-slots", "name": "Find Available Slots", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "rh@company.com",
+        "toEmail": "={{ $json.request.candidateEmail }}",
+        "subject": "Planification de votre entretien - {{ $json.request.jobTitle }}",
+        "html": "<h2>Bonjour {{ $json.request.candidateName }},</h2><p>Nous souhaitons vous rencontrer pour le poste de {{ $json.request.jobTitle }}.</p><p>Voici les créneaux disponibles:</p><ul>{{ $json.slots.map(s => `<li>${s.display}</li>`).join('') }}</ul><p>Merci de nous indiquer votre préférence.</p>"
+      },
+      "id": "send-invite", "name": "Send Slot Options", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "update", "pageId": "={{ $json.request.candidateId }}",
+        "properties": { "Status": { "select": { "name": "Interview Scheduling" } }, "Interview Slots Sent": { "date": { "start": "={{ new Date().toISOString() }}" } } }
+      },
+      "id": "notion-update", "name": "Update Candidate", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Schedule Request": { "main": [[{ "node": "Get Interviewer Calendar", "type": "main", "index": 0 }]] },
+    "Get Interviewer Calendar": { "main": [[{ "node": "Find Available Slots", "type": "main", "index": 0 }]] },
+    "Find Available Slots": { "main": [[{ "node": "Send Slot Options", "type": "main", "index": 0 }]] },
+    "Send Slot Options": { "main": [[{ "node": "Update Candidate", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "recruitment" }, { "name": "scheduling" }]
+}

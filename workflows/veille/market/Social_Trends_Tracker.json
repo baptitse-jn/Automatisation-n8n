@@ -1,0 +1,79 @@
+{
+  "name": "Social Trends Tracker",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "hours", "hoursInterval": 4 }] } },
+      "id": "schedule", "name": "Every 4 Hours", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://www.reddit.com/r/{{ $env.REDDIT_SUBREDDIT }}/hot.json",
+        "options": { "qs": { "limit": 25 } }
+      },
+      "id": "reddit-hot", "name": "Get Reddit Hot", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $env.TREND_KEYWORDS }} trending viral", "count": 20, "freshness": "pd" } }
+      },
+      "id": "search-trending", "name": "Search Trending", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 400],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const reddit = ($('Get Reddit Hot').first().json.data?.children || []).map(p => ({\n  source: 'reddit',\n  title: p.data.title,\n  score: p.data.score,\n  comments: p.data.num_comments,\n  url: `https://reddit.com${p.data.permalink}`\n}));\n\nconst web = ($('Search Trending').first().json.web?.results || []).map(r => ({\n  source: 'web',\n  title: r.title,\n  description: r.description,\n  url: r.url\n}));\n\nreturn [{ json: { reddit: reddit.slice(0, 10), web: web.slice(0, 10), timestamp: new Date().toISOString() } }];"
+      },
+      "id": "compile-trends", "name": "Compile Trends", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Analyse ces tendances sociales et web.\n\nReddit Hot:\n{{ JSON.stringify($json.reddit, null, 2) }}\n\nWeb Trending:\n{{ JSON.stringify($json.web, null, 2) }}\n\nGénère:\n{\n  \"topTrends\": [{ \"trend\": \"...\", \"source\": \"reddit|web|both\", \"sentiment\": \"positive|negative|neutral\", \"relevance\": \"high|medium|low\" }],\n  \"emergingTopics\": [\"Topic 1\", ...],\n  \"viralContent\": [{ \"title\": \"...\", \"why\": \"Pourquoi ça marche\" }],\n  \"communityInsights\": [\"Insight 1\", ...],\n  \"opportunities\": [\"Opportunity 1\", ...]\n}" }] },
+        "options": { "maxTokens": 1000 }
+      },
+      "id": "claude-analyze", "name": "Analyze Trends", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [850, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = JSON.parse($input.first().json.message.content);\nconst highRelevance = analysis.topTrends.filter(t => t.relevance === 'high');\nreturn [{ json: { analysis, hasHighRelevance: highRelevance.length > 0, highRelevance } }];"
+      },
+      "id": "check-relevance", "name": "Check Relevance", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1050, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.hasHighRelevance }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "is-relevant", "name": "High Relevance?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [1250, 200]
+    },
+    {
+      "parameters": { "channel": "#trends", "text": ":fire: *Tendances Sociales Détectées*\n\n*High Relevance:*\n{{ $json.highRelevance.map(t => `• ${t.trend} (${t.source}) - ${t.sentiment}`).join('\\n') }}\n\n*Emerging:*\n{{ $json.analysis.emergingTopics.join(', ') }}\n\n*Opportunités:*\n{{ $json.analysis.opportunities.map(o => '• ' + o).join('\\n') }}" },
+      "id": "slack-alert", "name": "Alert Relevant Trends", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1450, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_SOCIAL_TRENDS_DB }}",
+        "properties": {
+          "Timestamp": { "title": [{ "text": { "content": "={{ $('Compile Trends').first().json.timestamp }}" } }] },
+          "Trends Count": { "number": "={{ $json.analysis.topTrends.length }}" },
+          "High Relevance": { "number": "={{ $json.highRelevance.length }}" }
+        },
+        "blockContent": "={{ `## Top Trends\\n${$json.analysis.topTrends.map(t => `- **${t.trend}** (${t.source}): ${t.sentiment}`).join('\\n')}\\n\\n## Emerging Topics\\n${$json.analysis.emergingTopics.join(', ')}\\n\\n## Viral Content\\n${$json.analysis.viralContent.map(v => `### ${v.title}\\n${v.why}`).join('\\n\\n')}` }}"
+      },
+      "id": "notion-log", "name": "Log Trends", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1250, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Every 4 Hours": { "main": [[{ "node": "Get Reddit Hot", "type": "main", "index": 0 }, { "node": "Search Trending", "type": "main", "index": 0 }]] },
+    "Get Reddit Hot": { "main": [[{ "node": "Compile Trends", "type": "main", "index": 0 }]] },
+    "Search Trending": { "main": [[{ "node": "Compile Trends", "type": "main", "index": 0 }]] },
+    "Compile Trends": { "main": [[{ "node": "Analyze Trends", "type": "main", "index": 0 }]] },
+    "Analyze Trends": { "main": [[{ "node": "Check Relevance", "type": "main", "index": 0 }]] },
+    "Check Relevance": { "main": [[{ "node": "High Relevance?", "type": "main", "index": 0 }, { "node": "Log Trends", "type": "main", "index": 0 }]] },
+    "High Relevance?": { "main": [[{ "node": "Alert Relevant Trends", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "veille" }, { "name": "social" }, { "name": "trends" }]
+}

@@ -1,0 +1,59 @@
+{
+  "name": "Performance Review Reminder",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "months", "triggerAtDay": 1 }] } },
+      "id": "schedule", "name": "Monthly Check", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query", "databaseId": "={{ $env.NOTION_EMPLOYEES_DB }}",
+        "filterJson": "{ \"property\": \"Status\", \"select\": { \"equals\": \"Active\" } }"
+      },
+      "id": "get-employees", "name": "Get Active Employees", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const employees = $input.all().map(e => e.json);\nconst today = new Date();\n\nreturn employees.filter(emp => {\n  const lastReview = emp.properties.Last_Review?.date?.start;\n  if (!lastReview) return true;\n  const monthsSince = (today - new Date(lastReview)) / (1000 * 60 * 60 * 24 * 30);\n  return monthsSince >= 5.5; // 2 semaines avant les 6 mois\n}).map(emp => ({\n  json: {\n    name: emp.properties.Name?.title?.[0]?.plain_text,\n    email: emp.properties.Email?.email,\n    manager: emp.properties.Manager?.email,\n    lastReview: emp.properties.Last_Review?.date?.start,\n    department: emp.properties.Department?.select?.name\n  }\n}));"
+      },
+      "id": "filter-due", "name": "Filter Due Reviews", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "rh@company.com", "toEmail": "={{ $json.manager }}",
+        "subject": "Rappel: Entretien semestriel - {{ $json.name }}",
+        "html": "<h2>Entretien semestriel à planifier</h2><p>L'entretien de <b>{{ $json.name }}</b> arrive à échéance.</p><p>Dernier entretien: {{ $json.lastReview || 'Jamais' }}</p><p>Merci de planifier un créneau dans les 2 prochaines semaines.</p><p><a href='{{ $env.REVIEW_FORM_URL }}'>Accéder au formulaire d'entretien</a></p>"
+      },
+      "id": "send-reminder", "name": "Send Manager Reminder", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_REVIEWS_DB }}",
+        "properties": {
+          "Employee": { "title": [{ "text": { "content": "={{ $json.name }}" } }] },
+          "Manager": { "email": "={{ $json.manager }}" },
+          "Due Date": { "date": { "start": "={{ new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }}" } },
+          "Status": { "select": { "name": "Scheduled" } }
+        }
+      },
+      "id": "create-review", "name": "Create Review Record", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "#rh", "text": ":clipboard: *Entretiens à planifier ce mois*\n\n{{ $('Filter Due Reviews').all().length }} entretiens semestriels à organiser.\n\n{{ $('Filter Due Reviews').all().map(e => `• ${e.json.name} (${e.json.department})`).join('\\n') }}" },
+      "id": "slack-summary", "name": "HR Summary", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Monthly Check": { "main": [[{ "node": "Get Active Employees", "type": "main", "index": 0 }]] },
+    "Get Active Employees": { "main": [[{ "node": "Filter Due Reviews", "type": "main", "index": 0 }]] },
+    "Filter Due Reviews": { "main": [[{ "node": "Send Manager Reminder", "type": "main", "index": 0 }]] },
+    "Send Manager Reminder": { "main": [[{ "node": "Create Review Record", "type": "main", "index": 0 }]] },
+    "Create Review Record": { "main": [[{ "node": "HR Summary", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "performance" }]
+}

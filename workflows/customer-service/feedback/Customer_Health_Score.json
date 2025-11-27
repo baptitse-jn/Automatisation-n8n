@@ -1,0 +1,58 @@
+{
+  "name": "Customer Health Score",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "weeks", "triggerAtDay": [1], "triggerAtHour": 6 }] } },
+      "id": "schedule", "name": "Weekly Monday 6h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": { "operation": "query", "databaseId": "={{ $env.NOTION_CUSTOMERS_DB }}" },
+      "id": "get-customers", "name": "Get All Customers", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const customers = $input.all().map(c => c.json);\n\nreturn customers.map(customer => {\n  const props = customer.properties;\n  \n  // Facteurs de scoring\n  const lastLogin = props.Last_Login?.date?.start ? new Date(props.Last_Login.date.start) : null;\n  const daysSinceLogin = lastLogin ? Math.floor((Date.now() - lastLogin) / (1000 * 60 * 60 * 24)) : 999;\n  const ticketCount = props.Open_Tickets?.number || 0;\n  const npsScore = props.NPS_Score?.number;\n  const mrr = props.MRR?.number || 0;\n  const usagePercent = props.Usage_Percent?.number || 0;\n  \n  // Calcul du score\n  let score = 100;\n  if (daysSinceLogin > 30) score -= 30;\n  else if (daysSinceLogin > 14) score -= 15;\n  else if (daysSinceLogin > 7) score -= 5;\n  \n  if (ticketCount > 3) score -= 20;\n  else if (ticketCount > 1) score -= 10;\n  \n  if (npsScore !== null && npsScore <= 6) score -= 25;\n  else if (npsScore !== null && npsScore <= 8) score -= 10;\n  \n  if (usagePercent < 20) score -= 20;\n  else if (usagePercent < 50) score -= 10;\n  \n  score = Math.max(0, score);\n  const status = score >= 70 ? 'healthy' : score >= 40 ? 'at_risk' : 'critical';\n  \n  return {\n    json: {\n      customerId: customer.id,\n      name: props.Name?.title?.[0]?.plain_text,\n      email: props.Email?.email,\n      score,\n      status,\n      factors: { daysSinceLogin, ticketCount, npsScore, usagePercent, mrr }\n    }\n  };\n});"
+      },
+      "id": "calc-scores", "name": "Calculate Health Scores", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update", "pageId": "={{ $json.customerId }}",
+        "properties": { "Health_Score": { "number": "={{ $json.score }}" }, "Health_Status": { "select": { "name": "={{ $json.status }}" } } }
+      },
+      "id": "update-score", "name": "Update Customer Score", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.status }}", "rightValue": "critical", "operator": { "type": "string", "operation": "equals" } }] } },
+      "id": "is-critical", "name": "Critical?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 150]
+    },
+    {
+      "parameters": { "channel": "#customer-success", "text": ":rotating_light: *Client à risque critique*\n\n*{{ $json.name }}* - Score: {{ $json.score }}/100\n\n• Dernière connexion: {{ $json.factors.daysSinceLogin }} jours\n• Tickets ouverts: {{ $json.factors.ticketCount }}\n• Usage: {{ $json.factors.usagePercent }}%\n• MRR: {{ $json.factors.mrr }}€\n\nAction requise!" },
+      "id": "slack-alert", "name": "Alert CS Team", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 150],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const scores = $('Calculate Health Scores').all().map(s => s.json);\nconst critical = scores.filter(s => s.status === 'critical');\nconst atRisk = scores.filter(s => s.status === 'at_risk');\nconst healthy = scores.filter(s => s.status === 'healthy');\nconst avgScore = Math.round(scores.reduce((a, s) => a + s.score, 0) / scores.length);\n\nreturn [{ json: { total: scores.length, critical: critical.length, atRisk: atRisk.length, healthy: healthy.length, avgScore } }];"
+      },
+      "id": "summary", "name": "Generate Summary", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1050, 400]
+    },
+    {
+      "parameters": { "channel": "#customer-success", "text": ":chart_with_upwards_trend: *Health Score Weekly Report*\n\n*Score moyen:* {{ $json.avgScore }}/100\n\n:white_check_mark: Healthy: {{ $json.healthy }}\n:warning: At Risk: {{ $json.atRisk }}\n:rotating_light: Critical: {{ $json.critical }}" },
+      "id": "slack-summary", "name": "Post Summary", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 400],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Weekly Monday 6h": { "main": [[{ "node": "Get All Customers", "type": "main", "index": 0 }]] },
+    "Get All Customers": { "main": [[{ "node": "Calculate Health Scores", "type": "main", "index": 0 }]] },
+    "Calculate Health Scores": { "main": [[{ "node": "Update Customer Score", "type": "main", "index": 0 }, { "node": "Is Critical?", "type": "main", "index": 0 }]] },
+    "Update Customer Score": { "main": [[{ "node": "Generate Summary", "type": "main", "index": 0 }]] },
+    "Is Critical?": { "main": [[{ "node": "Alert CS Team", "type": "main", "index": 0 }]] },
+    "Generate Summary": { "main": [[{ "node": "Post Summary", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "customer-service" }, { "name": "health-score" }, { "name": "analytics" }]
+}

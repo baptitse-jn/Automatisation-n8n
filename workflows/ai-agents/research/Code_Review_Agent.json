@@ -1,0 +1,56 @@
+{
+  "name": "Code Review Agent",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "code-review", "options": {} },
+      "id": "webhook", "name": "Code Review Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un expert en code review. Analyse ce code et fournis une review détaillée.\n\nLangage: {{ $json.language }}\nContexte: {{ $json.context || 'Non spécifié' }}\n\nCode:\n```{{ $json.language }}\n{{ $json.code }}\n```\n\nEffectue une review complète:\n{\n  \"overallScore\": 0-100,\n  \"summary\": \"Résumé en 2-3 phrases\",\n  \"issues\": [\n    { \"severity\": \"critical|major|minor|suggestion\", \"line\": \"numéro ou range\", \"type\": \"bug|security|performance|style|logic\", \"description\": \"...\", \"suggestion\": \"code corrigé ou null\" }\n  ],\n  \"positives\": [\"Point positif 1\", ...],\n  \"securityConcerns\": [\"Concern 1 ou vide\"],\n  \"performanceNotes\": [\"Note 1 ou vide\"],\n  \"refactoringOpportunities\": [\"Opportunity 1 ou vide\"],\n  \"testingSuggestions\": [\"Test à ajouter 1\", ...]\n}" }] },
+        "options": { "maxTokens": 2500 }
+      },
+      "id": "claude-review", "name": "AI Code Review", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [450, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Code Review Request').first().json;\nconst review = JSON.parse($input.first().json.message.content);\n\nconst severityEmoji = { critical: '🔴', major: '🟠', minor: '🟡', suggestion: '💡' };\n\nconst markdown = `# Code Review\\n\\n**Score:** ${review.overallScore}/100\\n\\n## Summary\\n${review.summary}\\n\\n## Issues (${review.issues.length})\\n${review.issues.map(i => `${severityEmoji[i.severity]} **[${i.severity.toUpperCase()}]** Line ${i.line} - ${i.type}\\n> ${i.description}${i.suggestion ? `\\n\\`\\`\\`suggestion\\n${i.suggestion}\\n\\`\\`\\`` : ''}`).join('\\n\\n')}\\n\\n## Positives\\n${review.positives.map(p => `✅ ${p}`).join('\\n')}\\n\\n${review.securityConcerns.length ? `## Security Concerns\\n${review.securityConcerns.map(s => `🔒 ${s}`).join('\\n')}` : ''}\\n\\n## Testing Suggestions\\n${review.testingSuggestions.map(t => `🧪 ${t}`).join('\\n')}`;\n\nreturn [{ json: { review, markdown, request: { language: request.language, prId: request.prId } } }];"
+      },
+      "id": "format-review", "name": "Format Review", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.review.issues.filter(i => i.severity === 'critical').length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }] } },
+      "id": "has-critical", "name": "Has Critical?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 200]
+    },
+    {
+      "parameters": { "channel": "#dev-alerts", "text": ":rotating_light: *Code Review - Issues Critiques Détectées*\n\nPR: {{ $json.request.prId }}\nScore: {{ $json.review.overallScore }}/100\n\n{{ $json.review.issues.filter(i => i.severity === 'critical').map(i => `• Line ${i.line}: ${i.description}`).join('\\n') }}" },
+      "id": "slack-critical", "name": "Alert Critical", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_CODE_REVIEWS_DB }}",
+        "properties": {
+          "PR": { "title": [{ "text": { "content": "={{ $json.request.prId || 'Manual Review' }}" } }] },
+          "Language": { "select": { "name": "={{ $json.request.language }}" } },
+          "Score": { "number": "={{ $json.review.overallScore }}" },
+          "Issues": { "number": "={{ $json.review.issues.length }}" },
+          "Critical": { "number": "={{ $json.review.issues.filter(i => i.severity === 'critical').length }}" }
+        },
+        "blockContent": "={{ $json.markdown }}"
+      },
+      "id": "notion-save", "name": "Save Review", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Code Review Request": { "main": [[{ "node": "AI Code Review", "type": "main", "index": 0 }]] },
+    "AI Code Review": { "main": [[{ "node": "Format Review", "type": "main", "index": 0 }]] },
+    "Format Review": { "main": [[{ "node": "Has Critical?", "type": "main", "index": 0 }, { "node": "Save Review", "type": "main", "index": 0 }]] },
+    "Has Critical?": { "main": [[{ "node": "Alert Critical", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "ai-agents" }, { "name": "code-review" }]
+}

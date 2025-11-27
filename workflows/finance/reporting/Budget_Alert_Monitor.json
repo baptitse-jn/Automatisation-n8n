@@ -1,0 +1,46 @@
+{
+  "name": "Budget Alert Monitor",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "days", "triggerAtHour": 18 }] } },
+      "id": "schedule", "name": "Daily 18h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": { "operation": "query", "databaseId": "={{ $env.NOTION_BUDGETS_DB }}" },
+      "id": "get-budgets", "name": "Get Budgets", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 200],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "operation": "query", "databaseId": "={{ $env.NOTION_EXPENSES_DB }}" },
+      "id": "get-expenses", "name": "Get Expenses", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const budgets = $('Get Budgets').all().map(b => b.json);\nconst expenses = $('Get Expenses').all().map(e => e.json);\nconst currentMonth = new Date().toISOString().slice(0, 7);\n\nconst alerts = budgets.map(budget => {\n  const category = budget.properties.Category?.select?.name;\n  const limit = budget.properties.Limit?.number || 0;\n  const spent = expenses\n    .filter(e => e.properties.Category?.select?.name === category && e.properties.Date?.date?.start?.startsWith(currentMonth))\n    .reduce((s, e) => s + (e.properties.Amount?.number || 0), 0);\n  const percentage = limit > 0 ? (spent / limit) * 100 : 0;\n  \n  return {\n    category,\n    limit,\n    spent,\n    remaining: limit - spent,\n    percentage: percentage.toFixed(1),\n    status: percentage >= 100 ? 'exceeded' : percentage >= 80 ? 'warning' : 'ok'\n  };\n}).filter(a => a.status !== 'ok');\n\nreturn [{ json: { alerts, hasExceeded: alerts.some(a => a.status === 'exceeded'), hasWarning: alerts.some(a => a.status === 'warning') } }];"
+      },
+      "id": "check-budgets", "name": "Check Budget Status", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.alerts.length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }] } },
+      "id": "has-alerts", "name": "Has Alerts?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#finance",
+        "text": "{{ $json.hasExceeded ? ':rotating_light:' : ':warning:' }} *Alerte Budget*\n\n{{ $json.alerts.map(a => `*${a.category}*: ${a.spent.toFixed(2)}€ / ${a.limit}€ (${a.percentage}%) ${a.status === 'exceeded' ? '❌ DÉPASSÉ' : '⚠️ Attention'}`).join('\\n') }}"
+      },
+      "id": "slack-alert", "name": "Send Alert", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Daily 18h": { "main": [[{ "node": "Get Budgets", "type": "main", "index": 0 }, { "node": "Get Expenses", "type": "main", "index": 0 }]] },
+    "Get Budgets": { "main": [[{ "node": "Check Budget Status", "type": "main", "index": 0 }]] },
+    "Get Expenses": { "main": [[{ "node": "Check Budget Status", "type": "main", "index": 0 }]] },
+    "Check Budget Status": { "main": [[{ "node": "Has Alerts?", "type": "main", "index": 0 }]] },
+    "Has Alerts?": { "main": [[{ "node": "Send Alert", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "finance" }, { "name": "budget" }, { "name": "alert" }]
+}

@@ -1,0 +1,71 @@
+{
+  "name": "Document Approval Flow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "doc-approval",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Document Submitted",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const doc = $input.first().json;\n\nconst approversByType = {\n  'contract': ['legal@company.com', 'ceo@company.com'],\n  'expense': ['finance@company.com'],\n  'policy': ['hr@company.com', 'ceo@company.com'],\n  'marketing': ['marketing-lead@company.com']\n};\n\nreturn [{\n  json: {\n    documentId: doc.id,\n    title: doc.title,\n    type: doc.type,\n    submitter: doc.submitter,\n    url: doc.url,\n    approvers: approversByType[doc.type] || ['manager@company.com'],\n    currentStep: 0,\n    status: 'pending'\n  }\n}];"
+      },
+      "id": "prepare-approval",
+      "name": "Prepare Approval Chain",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "workflow@company.com",
+        "toEmail": "={{ $json.approvers[$json.currentStep] }}",
+        "subject": "[Approbation requise] {{ $json.title }}",
+        "html": "<h2>Document en attente d'approbation</h2><p><strong>{{ $json.title }}</strong></p><p>Soumis par: {{ $json.submitter }}</p><p>Type: {{ $json.type }}</p><p><a href='{{ $json.url }}'>Voir le document</a></p><p><a href='{{ $env.WEBHOOK_BASE }}/approve/{{ $json.documentId }}'>✅ Approuver</a> | <a href='{{ $env.WEBHOOK_BASE }}/reject/{{ $json.documentId }}'>❌ Rejeter</a></p>"
+      },
+      "id": "send-approval-request",
+      "name": "Send Approval Request",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [650, 300],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_APPROVALS_DB }}",
+        "properties": {
+          "Document": { "title": [{ "text": { "content": "={{ $json.title }}" } }] },
+          "Type": { "select": { "name": "={{ $json.type }}" } },
+          "Submitter": { "email": "={{ $json.submitter }}" },
+          "Status": { "select": { "name": "Pending" } },
+          "Current Approver": { "email": "={{ $json.approvers[$json.currentStep] }}" }
+        }
+      },
+      "id": "notion-track",
+      "name": "Track in Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [850, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "content": "## Document Approval Flow\n\n**Objectif:** Gère les chaînes d'approbation de documents\n\n**Flow:**\n1. Webhook reçoit nouveau document\n2. Détermine la chaîne d'approbation selon type\n3. Envoie email au premier approbateur\n4. Track dans Notion\n\n**Types:** contract, expense, policy, marketing\n\n**Credentials:** SMTP, Notion API" }
+    }
+  ],
+  "connections": {
+    "New Document Submitted": { "main": [[{ "node": "Prepare Approval Chain", "type": "main", "index": 0 }]] },
+    "Prepare Approval Chain": { "main": [[{ "node": "Send Approval Request", "type": "main", "index": 0 }]] },
+    "Send Approval Request": { "main": [[{ "node": "Track in Notion", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "operations" }, { "name": "approval" }]
+}

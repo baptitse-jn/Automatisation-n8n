@@ -1,0 +1,240 @@
+{
+  "name": "Social Listening Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.twitter.com/2/tweets/search/recent",
+        "authentication": "oAuth2Api",
+        "options": {
+          "qs": {
+            "query": "{{ $env.BRAND_NAME }} OR @{{ $env.BRAND_HANDLE }} -is:retweet",
+            "max_results": 100,
+            "tweet.fields": "created_at,author_id,public_metrics"
+          }
+        }
+      },
+      "id": "twitter-search",
+      "name": "Search Twitter Mentions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 200],
+      "credentials": {
+        "twitterOAuth2Api": {
+          "id": "twitter-creds",
+          "name": "Twitter OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://www.reddit.com/search.json",
+        "options": {
+          "qs": {
+            "q": "{{ $env.BRAND_NAME }}",
+            "sort": "new",
+            "limit": 50,
+            "t": "hour"
+          }
+        }
+      },
+      "id": "reddit-search",
+      "name": "Search Reddit Mentions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const twitter = $('Search Twitter Mentions').first().json.data || [];\nconst reddit = $('Search Reddit Mentions').first().json.data?.children || [];\n\nconst mentions = [\n  ...twitter.map(t => ({\n    platform: 'twitter',\n    text: t.text,\n    author: t.author_id,\n    url: `https://twitter.com/i/web/status/${t.id}`,\n    engagement: (t.public_metrics?.like_count || 0) + (t.public_metrics?.retweet_count || 0),\n    createdAt: t.created_at\n  })),\n  ...reddit.map(r => ({\n    platform: 'reddit',\n    text: r.data.title + ' ' + (r.data.selftext || '').substring(0, 200),\n    author: r.data.author,\n    url: `https://reddit.com${r.data.permalink}`,\n    engagement: r.data.score,\n    createdAt: new Date(r.data.created_utc * 1000).toISOString()\n  }))\n];\n\nreturn [{ json: { mentions, count: mentions.length } }];"
+      },
+      "id": "merge-mentions",
+      "name": "Merge All Mentions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Analyse ces mentions de marque et détermine le sentiment pour chacune.\n\nMentions:\n{{ JSON.stringify($json.mentions, null, 2) }}\n\nPour chaque mention, retourne un JSON array:\n[\n  {\n    \"platform\": \"...\",\n    \"text\": \"...\",\n    \"url\": \"...\",\n    \"sentiment\": \"positive|negative|neutral\",\n    \"sentimentScore\": -1 à 1,\n    \"urgency\": \"high|medium|low\",\n    \"category\": \"praise|complaint|question|mention\",\n    \"suggestedAction\": \"...\"\n  }\n]\n\nPriorise les mentions négatives avec fort engagement comme urgentes."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2000
+        }
+      },
+      "id": "claude-analyze",
+      "name": "Analyze Sentiment",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const analysis = JSON.parse($input.first().json.message.content);\n\nconst urgent = analysis.filter(m => m.urgency === 'high' || m.sentiment === 'negative');\nconst positive = analysis.filter(m => m.sentiment === 'positive');\n\nreturn [{\n  json: {\n    all: analysis,\n    urgent,\n    positive,\n    stats: {\n      total: analysis.length,\n      positive: positive.length,\n      negative: urgent.length,\n      avgSentiment: (analysis.reduce((a, m) => a + m.sentimentScore, 0) / analysis.length).toFixed(2)\n    }\n  }\n}];"
+      },
+      "id": "process-results",
+      "name": "Process Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-urgent",
+              "leftValue": "={{ $json.urgent.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-urgent",
+      "name": "Has Urgent?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "channel": "#social-alerts",
+        "text": ":rotating_light: *ALERTE - Mentions négatives détectées*\n\n{{ $json.urgent.map(m => `*${m.platform}*: ${m.text.substring(0, 100)}...\n:link: ${m.url}\n:bulb: Action suggérée: ${m.suggestedAction}`).join('\\n\\n') }}"
+      },
+      "id": "slack-alert",
+      "name": "Send Urgent Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 200],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_SOCIAL_LISTENING_DB }}",
+        "properties": {
+          "Date": { "title": [{ "text": { "content": "={{ new Date().toISOString().split('T')[0] }}" } }] },
+          "Total Mentions": { "number": "={{ $json.stats.total }}" },
+          "Positive": { "number": "={{ $json.stats.positive }}" },
+          "Negative": { "number": "={{ $json.stats.negative }}" },
+          "Avg Sentiment": { "number": "={{ parseFloat($json.stats.avgSentiment) }}" }
+        }
+      },
+      "id": "notion-log",
+      "name": "Log to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 400],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Social Listening Alert\n\n**Objectif:** Monitore les mentions de marque et alerte sur les sentiments négatifs\n\n**Flow:**\n1. Check toutes les heures\n2. Recherche Twitter (parallèle)\n3. Recherche Reddit (parallèle)\n4. Merge toutes les mentions\n5. Analyse sentiment avec Claude\n6. Process et catégorise\n7. Si urgent → Alerte Slack\n8. Log stats dans Notion\n\n**Variables d'environnement:**\n- BRAND_NAME: Nom de la marque\n- BRAND_HANDLE: Handle Twitter\n\n**Credentials requis:**\n- Twitter OAuth2\n- Anthropic API\n- Slack API\n- Notion API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Every Hour": {
+      "main": [
+        [
+          { "node": "Search Twitter Mentions", "type": "main", "index": 0 },
+          { "node": "Search Reddit Mentions", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Search Twitter Mentions": {
+      "main": [[{ "node": "Merge All Mentions", "type": "main", "index": 0 }]]
+    },
+    "Search Reddit Mentions": {
+      "main": [[{ "node": "Merge All Mentions", "type": "main", "index": 0 }]]
+    },
+    "Merge All Mentions": {
+      "main": [[{ "node": "Analyze Sentiment", "type": "main", "index": 0 }]]
+    },
+    "Analyze Sentiment": {
+      "main": [[{ "node": "Process Results", "type": "main", "index": 0 }]]
+    },
+    "Process Results": {
+      "main": [
+        [
+          { "node": "Has Urgent?", "type": "main", "index": 0 },
+          { "node": "Log to Notion", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Has Urgent?": {
+      "main": [[{ "node": "Send Urgent Alert", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "communication" },
+    { "name": "social-listening" },
+    { "name": "monitoring" },
+    { "name": "ai" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

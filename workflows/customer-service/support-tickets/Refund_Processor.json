@@ -1,0 +1,77 @@
+{
+  "name": "Refund Processor",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "refund-request", "options": {} },
+      "id": "webhook", "name": "Refund Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/charges/{{ $json.chargeId }}",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth"
+      },
+      "id": "get-charge", "name": "Get Stripe Charge", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 300],
+      "credentials": { "httpHeaderAuth": { "id": "stripe-creds", "name": "Stripe API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const request = $('Refund Request').first().json;\nconst charge = $input.first().json;\n\nconst daysSincePurchase = Math.floor((Date.now() - charge.created * 1000) / (1000 * 60 * 60 * 24));\nconst eligibleForAutoRefund = daysSincePurchase <= 30 && charge.amount <= 10000; // 30 jours et <= 100€\n\nreturn [{\n  json: {\n    request,\n    charge: { id: charge.id, amount: charge.amount / 100, currency: charge.currency, created: new Date(charge.created * 1000).toISOString() },\n    daysSincePurchase,\n    eligibleForAutoRefund,\n    refundAmount: request.partialAmount || charge.amount / 100\n  }\n}];"
+      },
+      "id": "check-eligibility", "name": "Check Eligibility", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.eligibleForAutoRefund }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "auto-eligible", "name": "Auto Eligible?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "https://api.stripe.com/v1/refunds", "method": "POST",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "body": { "charge": "={{ $json.charge.id }}", "amount": "={{ Math.round($json.refundAmount * 100) }}" }
+      },
+      "id": "process-refund", "name": "Process Stripe Refund", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [1050, 200],
+      "credentials": { "httpHeaderAuth": { "id": "stripe-creds", "name": "Stripe API" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "support@mywai.fr", "toEmail": "={{ $('Refund Request').first().json.customerEmail }}",
+        "subject": "Votre remboursement a été traité",
+        "html": "<h2>Remboursement confirmé</h2><p>Nous avons traité votre remboursement de <b>{{ $('Check Eligibility').first().json.refundAmount }}€</b>.</p><p>Le montant apparaîtra sur votre compte sous 5-10 jours ouvrés.</p>"
+      },
+      "id": "send-confirmation", "name": "Send Confirmation", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1250, 200],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "support@mywai.fr", "toEmail": "finance@mywai.fr",
+        "subject": "Demande de remboursement - Validation requise",
+        "html": "<h2>Remboursement à valider</h2><p>Client: {{ $json.request.customerEmail }}</p><p>Montant: {{ $json.refundAmount }}€</p><p>Jours depuis achat: {{ $json.daysSincePurchase }}</p><p>Raison: {{ $json.request.reason }}</p>"
+      },
+      "id": "escalate-refund", "name": "Escalate to Finance", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1050, 400],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_REFUNDS_DB }}",
+        "properties": {
+          "Customer": { "title": [{ "text": { "content": "={{ $json.request.customerEmail }}" } }] },
+          "Amount": { "number": "={{ $json.refundAmount }}" },
+          "Status": { "select": { "name": "={{ $json.eligibleForAutoRefund ? 'Processed' : 'Pending Approval' }}" } },
+          "Reason": { "rich_text": [{ "text": { "content": "={{ $json.request.reason }}" } }] }
+        }
+      },
+      "id": "log-refund", "name": "Log Refund", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Refund Request": { "main": [[{ "node": "Get Stripe Charge", "type": "main", "index": 0 }]] },
+    "Get Stripe Charge": { "main": [[{ "node": "Check Eligibility", "type": "main", "index": 0 }]] },
+    "Check Eligibility": { "main": [[{ "node": "Auto Eligible?", "type": "main", "index": 0 }, { "node": "Log Refund", "type": "main", "index": 0 }]] },
+    "Auto Eligible?": { "main": [[{ "node": "Process Stripe Refund", "type": "main", "index": 0 }]] },
+    "Process Stripe Refund": { "main": [[{ "node": "Send Confirmation", "type": "main", "index": 0 }]] },
+    "Log Refund": { "main": [[{ "node": "Escalate to Finance", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "customer-service" }, { "name": "refund" }]
+}

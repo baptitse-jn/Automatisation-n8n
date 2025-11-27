@@ -1,0 +1,72 @@
+{
+  "name": "Auto Response Bot",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "chat-message", "options": {} },
+      "id": "webhook", "name": "Chat Message", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query", "databaseId": "={{ $env.NOTION_FAQ_DB }}"
+      },
+      "id": "get-faq", "name": "Get FAQ Database", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 200],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un assistant support client pour MyWai.\n\nQuestion client: {{ $('Chat Message').first().json.message }}\n\nBase FAQ disponible:\n{{ $('Get FAQ Database').all().map(f => `Q: ${f.json.properties.Question?.title?.[0]?.plain_text}\\nA: ${f.json.properties.Answer?.rich_text?.[0]?.plain_text}`).join('\\n\\n') }}\n\nRègles:\n1. Si la FAQ contient la réponse, utilise-la\n2. Sinon, réponds de manière utile\n3. Si tu ne peux pas aider, indique qu'un humain va prendre le relais\n\nRetourne JSON:\n{\n  \"canAnswer\": true/false,\n  \"confidence\": 0-100,\n  \"response\": \"Réponse au client\",\n  \"faqUsed\": \"Question FAQ utilisée ou null\",\n  \"needsHuman\": true/false,\n  \"suggestedCategory\": \"...\"\n}" }] },
+        "options": { "maxTokens": 600 }
+      },
+      "id": "claude-respond", "name": "Generate Response", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [650, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $('Chat Message').first().json;\nconst result = JSON.parse($input.first().json.message.content);\n\nreturn [{ json: { sessionId: message.sessionId, customerId: message.customerId, question: message.message, ...result } }];"
+      },
+      "id": "prepare-response", "name": "Prepare Response", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.needsHuman }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }] } },
+      "id": "needs-human", "name": "Needs Human?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [1050, 200]
+    },
+    {
+      "parameters": { "channel": "#support-live", "text": ":hand: *Transfert humain requis*\n\nClient: {{ $json.customerId }}\nQuestion: {{ $json.question }}\nCatégorie suggérée: {{ $json.suggestedCategory }}\n\nSession: {{ $json.sessionId }}" },
+      "id": "slack-handoff", "name": "Human Handoff", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Chat Message').first().json.callbackUrl }}",
+        "method": "POST",
+        "body": { "sessionId": "={{ $json.sessionId }}", "response": "={{ $json.response }}", "needsHuman": "={{ $json.needsHuman }}" }
+      },
+      "id": "send-response", "name": "Send Response", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [1050, 400]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_CHAT_LOG_DB }}",
+        "properties": {
+          "Question": { "title": [{ "text": { "content": "={{ $json.question }}" } }] },
+          "Response": { "rich_text": [{ "text": { "content": "={{ $json.response }}" } }] },
+          "Confidence": { "number": "={{ $json.confidence }}" },
+          "Human Required": { "checkbox": "={{ $json.needsHuman }}" },
+          "FAQ Used": { "rich_text": [{ "text": { "content": "={{ $json.faqUsed || 'None' }}" } }] }
+        }
+      },
+      "id": "log-chat", "name": "Log Conversation", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1250, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Chat Message": { "main": [[{ "node": "Get FAQ Database", "type": "main", "index": 0 }]] },
+    "Get FAQ Database": { "main": [[{ "node": "Generate Response", "type": "main", "index": 0 }]] },
+    "Generate Response": { "main": [[{ "node": "Prepare Response", "type": "main", "index": 0 }]] },
+    "Prepare Response": { "main": [[{ "node": "Needs Human?", "type": "main", "index": 0 }, { "node": "Send Response", "type": "main", "index": 0 }]] },
+    "Needs Human?": { "main": [[{ "node": "Human Handoff", "type": "main", "index": 0 }]] },
+    "Send Response": { "main": [[{ "node": "Log Conversation", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "customer-service" }, { "name": "chatbot" }, { "name": "ai" }]
+}

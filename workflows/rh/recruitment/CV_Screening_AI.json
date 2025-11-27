@@ -1,0 +1,66 @@
+{
+  "name": "CV Screening AI",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "new-application", "options": {} },
+      "id": "webhook", "name": "New Application", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "query", "databaseId": "={{ $env.NOTION_JOBS_DB }}",
+        "filterJson": "{ \"property\": \"ID\", \"rich_text\": { \"equals\": \"{{ $json.jobId }}\" } }"
+      },
+      "id": "get-job", "name": "Get Job Requirements", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Analyse ce CV par rapport à l'offre d'emploi.\n\nOffre:\n{{ $('Get Job Requirements').first().json.properties.Requirements?.rich_text?.[0]?.plain_text }}\n\nCV:\n{{ $('New Application').first().json.cvText }}\n\nRetourne JSON:\n{\n  \"score\": 0-100,\n  \"recommendation\": \"reject|maybe|interview\",\n  \"matchingSkills\": [\"...\"],\n  \"missingSkills\": [\"...\"],\n  \"experience\": { \"years\": 0, \"relevant\": true/false },\n  \"strengths\": [\"...\"],\n  \"concerns\": [\"...\"],\n  \"summary\": \"2-3 phrases\"\n}" }] },
+        "options": { "maxTokens": 1000 }
+      },
+      "id": "claude-analyze", "name": "Analyze CV", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [650, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const app = $('New Application').first().json;\nconst analysis = JSON.parse($input.first().json.message.content);\n\nreturn [{ json: { ...app, analysis } }];"
+      },
+      "id": "merge", "name": "Merge Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_CANDIDATES_DB }}",
+        "properties": {
+          "Name": { "title": [{ "text": { "content": "={{ $json.candidateName }}" } }] },
+          "Email": { "email": "={{ $json.email }}" },
+          "Job": { "relation": [{ "id": "={{ $('Get Job Requirements').first().json.id }}" }] },
+          "Score": { "number": "={{ $json.analysis.score }}" },
+          "Recommendation": { "select": { "name": "={{ $json.analysis.recommendation }}" } },
+          "Status": { "select": { "name": "New" } }
+        },
+        "blockContent": "={{ $json.analysis.summary }}\\n\\n**Forces:** {{ $json.analysis.strengths.join(', ') }}\\n**Points d'attention:** {{ $json.analysis.concerns.join(', ') }}"
+      },
+      "id": "notion-save", "name": "Save Candidate", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.analysis.recommendation }}", "rightValue": "interview", "operator": { "type": "string", "operation": "equals" } }] } },
+      "id": "should-interview", "name": "Interview?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [1050, 150]
+    },
+    {
+      "parameters": { "channel": "#recrutement", "text": ":star: *Candidat prometteur*\n\n*{{ $json.candidateName }}* pour *{{ $('Get Job Requirements').first().json.properties.Title?.title?.[0]?.plain_text }}*\n\nScore: {{ $json.analysis.score }}/100\n{{ $json.analysis.summary }}" },
+      "id": "slack-alert", "name": "Alert HR", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 150],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "New Application": { "main": [[{ "node": "Get Job Requirements", "type": "main", "index": 0 }]] },
+    "Get Job Requirements": { "main": [[{ "node": "Analyze CV", "type": "main", "index": 0 }]] },
+    "Analyze CV": { "main": [[{ "node": "Merge Data", "type": "main", "index": 0 }]] },
+    "Merge Data": { "main": [[{ "node": "Save Candidate", "type": "main", "index": 0 }, { "node": "Interview?", "type": "main", "index": 0 }]] },
+    "Interview?": { "main": [[{ "node": "Alert HR", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "recruitment" }, { "name": "ai" }]
+}

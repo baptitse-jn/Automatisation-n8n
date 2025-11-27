@@ -1,0 +1,69 @@
+{
+  "name": "Market Trends Analyzer",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "weeks", "triggerAtDay": [1], "triggerAtHour": 8 }] } },
+      "id": "schedule", "name": "Weekly Monday 8h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $env.MARKET_KEYWORDS }} market trends 2024", "count": 20, "freshness": "pw" } }
+      },
+      "id": "search-trends", "name": "Search Market Trends", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 200],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/news/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $env.MARKET_KEYWORDS }} industry report funding", "count": 20, "freshness": "pw" } }
+      },
+      "id": "search-news", "name": "Search Industry News", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 400],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const trends = ($('Search Market Trends').first().json.web?.results || []).map(r => ({ title: r.title, description: r.description, url: r.url }));\nconst news = ($('Search Industry News').first().json.results || []).map(r => ({ title: r.title, description: r.description, url: r.url, source: r.source }));\n\nreturn [{ json: { trends: trends.slice(0, 10), news: news.slice(0, 10), weekOf: new Date().toISOString().split('T')[0] } }];"
+      },
+      "id": "compile-data", "name": "Compile Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un analyste marché expert. Analyse ces données et génère un rapport de tendances.\n\nArticles tendances:\n{{ JSON.stringify($json.trends, null, 2) }}\n\nNews industrie:\n{{ JSON.stringify($json.news, null, 2) }}\n\nGénère un rapport:\n{\n  \"executiveSummary\": \"3-4 phrases sur l'état du marché\",\n  \"keyTrends\": [\n    { \"trend\": \"Nom de la tendance\", \"description\": \"...\", \"impact\": \"high|medium|low\", \"timeframe\": \"short|medium|long\" }\n  ],\n  \"marketSignals\": [\n    { \"signal\": \"...\", \"type\": \"opportunity|threat|neutral\", \"source\": \"...\" }\n  ],\n  \"industryMoves\": [\"Move 1\", ...],\n  \"outlook\": \"Perspective à 3-6 mois\",\n  \"recommendedActions\": [\"Action 1\", ...]\n}" }] },
+        "options": { "maxTokens": 2000 }
+      },
+      "id": "claude-analyze", "name": "Analyze Trends", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [850, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_MARKET_INTEL_DB }}",
+        "properties": {
+          "Week": { "title": [{ "text": { "content": "Semaine du {{ $('Compile Data').first().json.weekOf }}" } }] },
+          "Type": { "select": { "name": "Weekly Trends" } }
+        },
+        "blockContent": "={{ `## Executive Summary\\n${JSON.parse($json.message.content).executiveSummary}\\n\\n## Key Trends\\n${JSON.parse($json.message.content).keyTrends.map(t => `### ${t.trend}\\n${t.description}\\n- Impact: ${t.impact}\\n- Timeframe: ${t.timeframe}`).join('\\n\\n')}\\n\\n## Market Signals\\n${JSON.parse($json.message.content).marketSignals.map(s => `- ${s.type === 'opportunity' ? '🟢' : s.type === 'threat' ? '🔴' : '⚪'} ${s.signal}`).join('\\n')}\\n\\n## Outlook\\n${JSON.parse($json.message.content).outlook}\\n\\n## Recommended Actions\\n${JSON.parse($json.message.content).recommendedActions.map(a => '- ' + a).join('\\n')}` }}"
+      },
+      "id": "notion-save", "name": "Save Report", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "#strategy", "text": ":chart_with_upwards_trend: *Rapport Tendances Marché - Semaine {{ $('Compile Data').first().json.weekOf }}*\n\n{{ JSON.parse($('Analyze Trends').first().json.message.content).executiveSummary }}\n\n*Top Trends:*\n{{ JSON.parse($('Analyze Trends').first().json.message.content).keyTrends.slice(0, 3).map(t => `• ${t.trend} (${t.impact})`).join('\\n') }}\n\nRapport complet dans Notion." },
+      "id": "slack-report", "name": "Share Report", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Weekly Monday 8h": { "main": [[{ "node": "Search Market Trends", "type": "main", "index": 0 }, { "node": "Search Industry News", "type": "main", "index": 0 }]] },
+    "Search Market Trends": { "main": [[{ "node": "Compile Data", "type": "main", "index": 0 }]] },
+    "Search Industry News": { "main": [[{ "node": "Compile Data", "type": "main", "index": 0 }]] },
+    "Compile Data": { "main": [[{ "node": "Analyze Trends", "type": "main", "index": 0 }]] },
+    "Analyze Trends": { "main": [[{ "node": "Save Report", "type": "main", "index": 0 }]] },
+    "Save Report": { "main": [[{ "node": "Share Report", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "veille" }, { "name": "market" }]
+}

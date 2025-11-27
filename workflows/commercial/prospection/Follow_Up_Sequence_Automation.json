@@ -1,0 +1,206 @@
+{
+  "name": "Follow-Up Sequence Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily Check 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "search",
+        "filterGroups": {
+          "filterGroups": [
+            {
+              "filters": [
+                {
+                  "propertyName": "last_activity_date",
+                  "operator": "LT",
+                  "value": "={{ new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0] }}"
+                },
+                {
+                  "propertyName": "lifecyclestage",
+                  "operator": "EQ",
+                  "value": "lead"
+                }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "limit": 50
+        }
+      },
+      "id": "hubspot-inactive",
+      "name": "Find Inactive Leads",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const leads = $input.all();\n\nreturn leads.map(lead => {\n  const contact = lead.json;\n  const lastActivity = new Date(contact.properties.last_activity_date);\n  const daysSinceActivity = Math.floor((Date.now() - lastActivity) / (1000 * 60 * 60 * 24));\n  \n  let sequenceStep = 1;\n  if (daysSinceActivity >= 21) sequenceStep = 3;\n  else if (daysSinceActivity >= 14) sequenceStep = 2;\n  \n  return {\n    json: {\n      contactId: contact.id,\n      email: contact.properties.email,\n      firstName: contact.properties.firstname || 'there',\n      company: contact.properties.company || '',\n      daysSinceActivity,\n      sequenceStep,\n      previousEmails: contact.properties.follow_up_count || 0\n    }\n  };\n}).filter(item => item.json.previousEmails < 3);"
+      },
+      "id": "prepare-sequence",
+      "name": "Prepare Sequence Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un expert en copywriting commercial. Génère un email de relance personnalisé.\n\nContexte:\n- Prénom: {{ $json.firstName }}\n- Entreprise: {{ $json.company }}\n- Jours sans activité: {{ $json.daysSinceActivity }}\n- Étape séquence: {{ $json.sequenceStep }}/3\n- Emails précédents: {{ $json.previousEmails }}\n\nRègles par étape:\n1. Étape 1: Rappel amical, valeur ajoutée, question ouverte\n2. Étape 2: Cas client similaire, urgence douce\n3. Étape 3: Dernier message, proposition claire, FOMO\n\nGénère un JSON:\n{\n  \"subject\": \"Objet accrocheur (50 car max)\",\n  \"body\": \"Corps du mail en HTML simple\",\n  \"cta\": \"Call-to-action\"\n}\n\nTon: Professionnel, personnalisé, pas pushy."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 800
+        }
+      },
+      "id": "claude-generate",
+      "name": "Generate Personalized Email",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "sales@mywai.fr",
+        "toEmail": "={{ $('Prepare Sequence Data').item.json.email }}",
+        "subject": "={{ JSON.parse($json.message.content).subject }}",
+        "html": "={{ JSON.parse($json.message.content).body }}",
+        "options": {
+          "replyTo": "sales@mywai.fr"
+        }
+      },
+      "id": "send-email",
+      "name": "Send Follow-Up Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1050, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "contact",
+        "operation": "update",
+        "contactId": "={{ $('Prepare Sequence Data').item.json.contactId }}",
+        "updateFields": {
+          "customFields": {
+            "follow_up_count": "={{ $('Prepare Sequence Data').item.json.previousEmails + 1 }}",
+            "last_follow_up_date": "={{ new Date().toISOString() }}"
+          }
+        }
+      },
+      "id": "hubspot-update",
+      "name": "Update Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "credentials": {
+        "hubspotApi": {
+          "id": "hubspot-creds",
+          "name": "HubSpot API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#sales",
+        "text": ":email: *Follow-ups envoyés*\n\nContacts relancés aujourd'hui: {{ $('Prepare Sequence Data').all().length }}\n\nDétail:\n{{ $('Prepare Sequence Data').all().map(i => `- ${i.json.email} (Step ${i.json.sequenceStep})`).join('\\n') }}"
+      },
+      "id": "slack-summary",
+      "name": "Daily Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Follow-Up Sequence Automation\n\n**Objectif:** Relance automatique des leads inactifs avec emails personnalisés par IA\n\n**Flow:**\n1. Check quotidien à 9h\n2. Trouve leads inactifs depuis 7+ jours\n3. Détermine l'étape de la séquence\n4. Génère email personnalisé avec Claude\n5. Envoie l'email\n6. Met à jour le contact HubSpot\n7. Résumé quotidien sur Slack\n\n**Séquence:**\n- Étape 1 (J+7): Rappel amical\n- Étape 2 (J+14): Social proof\n- Étape 3 (J+21): Dernier message\n\n**Credentials requis:**\n- HubSpot API\n- Anthropic API\n- SMTP\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Daily Check 9h": {
+      "main": [[{ "node": "Find Inactive Leads", "type": "main", "index": 0 }]]
+    },
+    "Find Inactive Leads": {
+      "main": [[{ "node": "Prepare Sequence Data", "type": "main", "index": 0 }]]
+    },
+    "Prepare Sequence Data": {
+      "main": [[{ "node": "Generate Personalized Email", "type": "main", "index": 0 }]]
+    },
+    "Generate Personalized Email": {
+      "main": [[{ "node": "Send Follow-Up Email", "type": "main", "index": 0 }]]
+    },
+    "Send Follow-Up Email": {
+      "main": [[{ "node": "Update Contact", "type": "main", "index": 0 }]]
+    },
+    "Update Contact": {
+      "main": [[{ "node": "Daily Summary", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "commercial" },
+    { "name": "prospection" },
+    { "name": "email" },
+    { "name": "automation" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

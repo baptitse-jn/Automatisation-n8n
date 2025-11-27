@@ -1,0 +1,64 @@
+{
+  "name": "Competitor Monitor",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "days", "triggerAtHour": 6 }] } },
+      "id": "schedule", "name": "Daily 6h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": { "operation": "query", "databaseId": "={{ $env.NOTION_COMPETITORS_DB }}" },
+      "id": "get-competitors", "name": "Get Competitors List", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [450, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const competitors = $input.all().map(c => ({\n  name: c.json.properties.Name?.title?.[0]?.plain_text,\n  website: c.json.properties.Website?.url,\n  twitter: c.json.properties.Twitter?.rich_text?.[0]?.plain_text,\n  keywords: c.json.properties.Keywords?.multi_select?.map(k => k.name) || []\n}));\nreturn competitors.map(c => ({ json: c }));"
+      },
+      "id": "extract-competitors", "name": "Extract Competitor Info", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $json.name }} news OR announcement OR launch site:{{ $json.website.replace('https://', '').replace('http://', '').split('/')[0] }}", "count": 5, "freshness": "pd" } }
+      },
+      "id": "search-news", "name": "Search Competitor News", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [850, 300],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const searches = $input.all();\nconst competitors = $('Extract Competitor Info').all();\n\nconst updates = searches.map((search, i) => {\n  const results = search.json.web?.results || [];\n  return {\n    competitor: competitors[i].json.name,\n    hasNews: results.length > 0,\n    news: results.slice(0, 3).map(r => ({ title: r.title, url: r.url, description: r.description }))\n  };\n}).filter(u => u.hasNews);\n\nreturn [{ json: { updates, date: new Date().toISOString().split('T')[0] } }];"
+      },
+      "id": "compile-updates", "name": "Compile Updates", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [1050, 300]
+    },
+    {
+      "parameters": { "conditions": { "conditions": [{ "leftValue": "={{ $json.updates.length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }] } },
+      "id": "has-updates", "name": "Has Updates?", "type": "n8n-nodes-base.filter", "typeVersion": 2, "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Analyse ces actualités de concurrents:\n\n{{ JSON.stringify($json.updates, null, 2) }}\n\nGénère un brief:\n{\n  \"summary\": \"Résumé des mouvements concurrentiels\",\n  \"alerts\": [{ \"competitor\": \"...\", \"type\": \"product_launch|partnership|funding|hiring|other\", \"importance\": \"high|medium|low\", \"description\": \"...\" }],\n  \"recommendations\": [\"Action suggérée 1\", ...]\n}" }] },
+        "options": { "maxTokens": 800 }
+      },
+      "id": "claude-analyze", "name": "Analyze Competitive Intel", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [1450, 200],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": { "channel": "#competitive-intel", "text": ":eyes: *Veille Concurrentielle - {{ $('Compile Updates').first().json.date }}*\n\n{{ JSON.parse($json.message.content).summary }}\n\n*Alertes:*\n{{ JSON.parse($json.message.content).alerts.map(a => `${a.importance === 'high' ? ':rotating_light:' : ':small_blue_diamond:'} *${a.competitor}* - ${a.type}: ${a.description}`).join('\\n') }}" },
+      "id": "slack-alert", "name": "Alert Team", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1650, 200],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Daily 6h": { "main": [[{ "node": "Get Competitors List", "type": "main", "index": 0 }]] },
+    "Get Competitors List": { "main": [[{ "node": "Extract Competitor Info", "type": "main", "index": 0 }]] },
+    "Extract Competitor Info": { "main": [[{ "node": "Search Competitor News", "type": "main", "index": 0 }]] },
+    "Search Competitor News": { "main": [[{ "node": "Compile Updates", "type": "main", "index": 0 }]] },
+    "Compile Updates": { "main": [[{ "node": "Has Updates?", "type": "main", "index": 0 }]] },
+    "Has Updates?": { "main": [[{ "node": "Analyze Competitive Intel", "type": "main", "index": 0 }]] },
+    "Analyze Competitive Intel": { "main": [[{ "node": "Alert Team", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "veille" }, { "name": "competitive" }]
+}

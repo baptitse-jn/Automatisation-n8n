@@ -1,0 +1,151 @@
+{
+  "name": "Employee Onboarding Comms",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-employee",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Employee Added",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "new-employee-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const employee = $input.first().json;\nconst startDate = new Date(employee.startDate);\n\n// Calculer les dates clés\nconst dates = {\n  welcome: new Date(startDate.getTime() - 3 * 24 * 60 * 60 * 1000), // J-3\n  day1: startDate,\n  day3: new Date(startDate.getTime() + 2 * 24 * 60 * 60 * 1000),\n  week1: new Date(startDate.getTime() + 6 * 24 * 60 * 60 * 1000),\n  month1: new Date(startDate.getTime() + 29 * 24 * 60 * 60 * 1000)\n};\n\nreturn [{\n  json: {\n    employee: {\n      firstName: employee.firstName,\n      lastName: employee.lastName,\n      email: employee.email,\n      personalEmail: employee.personalEmail,\n      position: employee.position,\n      department: employee.department,\n      manager: employee.manager,\n      managerEmail: employee.managerEmail,\n      startDate: employee.startDate\n    },\n    sequence: [\n      { type: 'welcome', date: dates.welcome.toISOString(), channel: 'personal_email' },\n      { type: 'day1_morning', date: dates.day1.toISOString(), channel: 'slack' },\n      { type: 'day1_checkin', date: new Date(dates.day1.getTime() + 16 * 60 * 60 * 1000).toISOString(), channel: 'email' },\n      { type: 'day3_feedback', date: dates.day3.toISOString(), channel: 'email' },\n      { type: 'week1_review', date: dates.week1.toISOString(), channel: 'email' },\n      { type: 'month1_survey', date: dates.month1.toISOString(), channel: 'email' }\n    ]\n  }\n}];"
+      },
+      "id": "prepare-sequence",
+      "name": "Prepare Onboarding Sequence",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#team-{{ $json.employee.department }}",
+        "text": ":wave: *Nouveau membre dans l'équipe!*\n\n*{{ $json.employee.firstName }} {{ $json.employee.lastName }}* rejoint l'équipe {{ $json.employee.department }} en tant que *{{ $json.employee.position }}*.\n\nDate d'arrivée: {{ new Date($json.employee.startDate).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) }}\n\nManager: {{ $json.employee.manager }}\n\nBienvenue {{ $json.employee.firstName }}! :tada:"
+      },
+      "id": "slack-announce",
+      "name": "Announce on Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [700, 150],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "rh@mywai.fr",
+        "toEmail": "={{ $json.employee.personalEmail }}",
+        "subject": "Bienvenue chez MyWai, {{ $json.employee.firstName }}! Votre arrivée approche",
+        "html": "<div style=\"font-family: Arial; max-width: 600px; margin: 0 auto;\">\n  <h1 style=\"color: #3498db;\">Bienvenue {{ $json.employee.firstName }}! 🎉</h1>\n  \n  <p>Nous sommes ravis de vous accueillir chez MyWai!</p>\n  \n  <p>Votre premier jour est prévu le <strong>{{ new Date($json.employee.startDate).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) }}</strong>.</p>\n  \n  <h2>Ce qu'il faut savoir:</h2>\n  <ul>\n    <li>📍 Adresse: [Adresse bureau]</li>\n    <li>🕐 Heure d'arrivée: 9h00</li>\n    <li>👤 Votre manager {{ $json.employee.manager }} vous accueillera</li>\n    <li>💻 Votre matériel sera prêt à votre arrivée</li>\n  </ul>\n  \n  <h2>Documents à apporter:</h2>\n  <ul>\n    <li>Pièce d'identité</li>\n    <li>RIB</li>\n    <li>Attestation de sécurité sociale</li>\n  </ul>\n  \n  <p>Des questions? Répondez à cet email ou contactez-nous.</p>\n  \n  <p>À très bientôt!<br>L'équipe RH</p>\n</div>",
+        "options": {}
+      },
+      "id": "send-welcome",
+      "name": "Send Welcome Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [700, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "rh@mywai.fr",
+        "toEmail": "={{ $json.employee.managerEmail }}",
+        "subject": "Préparation arrivée: {{ $json.employee.firstName }} {{ $json.employee.lastName }}",
+        "html": "<div style=\"font-family: Arial; max-width: 600px;\">\n  <h2>Nouveau membre dans votre équipe</h2>\n  \n  <p><strong>{{ $json.employee.firstName }} {{ $json.employee.lastName }}</strong> arrive le {{ new Date($json.employee.startDate).toLocaleDateString('fr-FR') }} en tant que {{ $json.employee.position }}.</p>\n  \n  <h3>Checklist manager:</h3>\n  <ul>\n    <li>☐ Préparer le poste de travail</li>\n    <li>☐ Planifier le welcome meeting</li>\n    <li>☐ Assigner un buddy</li>\n    <li>☐ Préparer le planning de la 1ère semaine</li>\n    <li>☐ Ajouter aux channels Slack pertinents</li>\n    <li>☐ Bloquer du temps pour le suivi J+3</li>\n  </ul>\n  \n  <p>Le suivi RH automatique est en place.</p>\n</div>",
+        "options": {}
+      },
+      "id": "notify-manager",
+      "name": "Notify Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [700, 450],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_ONBOARDING_DB }}",
+        "properties": {
+          "Employee": { "title": [{ "text": { "content": "={{ $json.employee.firstName }} {{ $json.employee.lastName }}" } }] },
+          "Email": { "email": "={{ $json.employee.email }}" },
+          "Position": { "rich_text": [{ "text": { "content": "={{ $json.employee.position }}" } }] },
+          "Department": { "select": { "name": "={{ $json.employee.department }}" } },
+          "Start Date": { "date": { "start": "={{ $json.employee.startDate }}" } },
+          "Manager": { "rich_text": [{ "text": { "content": "={{ $json.employee.manager }}" } }] },
+          "Status": { "select": { "name": "Pre-boarding" } }
+        }
+      },
+      "id": "notion-create",
+      "name": "Create Onboarding Record",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [950, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Employee Onboarding Comms\n\n**Objectif:** Automatise la communication d'onboarding pour les nouveaux employés\n\n**Flow:**\n1. Webhook reçoit infos nouvel employé\n2. Prépare la séquence de communications\n3. Annonce sur Slack (parallèle)\n4. Envoie email welcome à l'employé (parallèle)\n5. Notifie le manager (parallèle)\n6. Crée le record d'onboarding dans Notion\n\n**Séquence programmée:**\n- J-3: Email de bienvenue\n- J+0 matin: Message Slack équipe\n- J+0 soir: Check-in email\n- J+3: Email feedback\n- J+7: Review 1ère semaine\n- J+30: Survey satisfaction\n\n**Webhook payload:**\n```json\n{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"email\": \"john@company.com\",\n  \"personalEmail\": \"john@gmail.com\",\n  \"position\": \"Developer\",\n  \"department\": \"engineering\",\n  \"manager\": \"Jane Smith\",\n  \"managerEmail\": \"jane@company.com\",\n  \"startDate\": \"2024-02-01\"\n}\n```\n\n**Credentials requis:**\n- Slack API\n- SMTP\n- Notion API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "New Employee Added": {
+      "main": [[{ "node": "Prepare Onboarding Sequence", "type": "main", "index": 0 }]]
+    },
+    "Prepare Onboarding Sequence": {
+      "main": [
+        [
+          { "node": "Announce on Slack", "type": "main", "index": 0 },
+          { "node": "Send Welcome Email", "type": "main", "index": 0 },
+          { "node": "Notify Manager", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Welcome Email": {
+      "main": [[{ "node": "Create Onboarding Record", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "communication" },
+    { "name": "internal" },
+    { "name": "onboarding" },
+    { "name": "hr" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

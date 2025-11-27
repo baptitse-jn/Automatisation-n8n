@@ -1,0 +1,181 @@
+{
+  "name": "Newsletter Weekly Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [1],
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Monday 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.feedly.com/v3/streams/contents",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "qs": {
+            "streamId": "={{ $json.feedlyStreamId }}",
+            "count": 20
+          }
+        }
+      },
+      "id": "feedly-fetch",
+      "name": "Fetch RSS Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const articles = $input.all().map(item => item.json);\n\nconst filtered = articles\n  .filter(a => a.engagement && a.engagement > 100)\n  .slice(0, 10)\n  .map(a => ({\n    title: a.title,\n    summary: a.summary?.content || '',\n    url: a.canonicalUrl || a.originId,\n    source: a.origin?.title || 'Unknown',\n    published: a.published\n  }));\n\nreturn filtered.map(a => ({ json: a }));"
+      },
+      "id": "filter-articles",
+      "name": "Filter Top Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un expert en rédaction de newsletters. À partir des articles suivants, rédige une newsletter engageante en français.\n\nArticles:\n{{ $json.articles }}\n\nStructure:\n1. Titre accrocheur\n2. Introduction (2-3 phrases)\n3. Pour chaque article: titre, résumé de 2 phrases, lien\n4. Conclusion avec call-to-action\n\nTon: professionnel mais accessible, engageant."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 2000
+        }
+      },
+      "id": "claude-generate",
+      "name": "Generate Newsletter Content",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "campaign",
+        "operation": "create",
+        "listId": "={{ $env.MAILCHIMP_LIST_ID }}",
+        "subject": "={{ $json.subject }}",
+        "fromName": "MyWai Newsletter",
+        "replyTo": "newsletter@mywai.fr",
+        "htmlContent": "={{ $json.htmlContent }}"
+      },
+      "id": "mailchimp-create",
+      "name": "Create Mailchimp Campaign",
+      "type": "n8n-nodes-base.mailchimp",
+      "typeVersion": 1,
+      "position": [1050, 300],
+      "credentials": {
+        "mailchimpApi": {
+          "id": "mailchimp-creds",
+          "name": "Mailchimp API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "campaign",
+        "operation": "send",
+        "campaignId": "={{ $json.id }}"
+      },
+      "id": "mailchimp-send",
+      "name": "Send Campaign",
+      "type": "n8n-nodes-base.mailchimp",
+      "typeVersion": 1,
+      "position": [1250, 300],
+      "credentials": {
+        "mailchimpApi": {
+          "id": "mailchimp-creds",
+          "name": "Mailchimp API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#marketing",
+        "text": ":email: Newsletter envoyée avec succès!\n\nSujet: {{ $json.subject }}\nDestinataires: {{ $json.recipientCount }}"
+      },
+      "id": "slack-notify",
+      "name": "Notify Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Newsletter Weekly Automation\n\n**Objectif:** Génère et envoie automatiquement une newsletter hebdomadaire\n\n**Flow:**\n1. Trigger chaque lundi 9h\n2. Récupère articles Feedly\n3. Filtre les plus engageants\n4. Génère contenu avec Claude\n5. Crée et envoie campagne Mailchimp\n6. Notifie sur Slack\n\n**Credentials requis:**\n- Feedly API\n- Anthropic API\n- Mailchimp API\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Every Monday 9h": {
+      "main": [[{ "node": "Fetch RSS Articles", "type": "main", "index": 0 }]]
+    },
+    "Fetch RSS Articles": {
+      "main": [[{ "node": "Filter Top Articles", "type": "main", "index": 0 }]]
+    },
+    "Filter Top Articles": {
+      "main": [[{ "node": "Generate Newsletter Content", "type": "main", "index": 0 }]]
+    },
+    "Generate Newsletter Content": {
+      "main": [[{ "node": "Create Mailchimp Campaign", "type": "main", "index": 0 }]]
+    },
+    "Create Mailchimp Campaign": {
+      "main": [[{ "node": "Send Campaign", "type": "main", "index": 0 }]]
+    },
+    "Send Campaign": {
+      "main": [[{ "node": "Notify Slack", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "marketing" },
+    { "name": "email" },
+    { "name": "newsletter" },
+    { "name": "automation" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

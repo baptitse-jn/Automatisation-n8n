@@ -1,0 +1,240 @@
+{
+  "name": "Social Media Post Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "social-post",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "social-post-webhook"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un expert en social media marketing. Adapte ce contenu pour chaque plateforme.\n\nContenu source:\n{{ $json.content }}\n\nTon: {{ $json.tone || 'professionnel et engageant' }}\n\nGénère un JSON avec:\n{\n  \"linkedin\": \"post LinkedIn (professionnel, 1300 car max, emojis modérés)\",\n  \"twitter\": \"tweet (280 car max, hashtags pertinents)\",\n  \"instagram\": \"caption Instagram (engageant, emojis, hashtags à la fin)\",\n  \"facebook\": \"post Facebook (conversationnel, peut être plus long)\"\n}\n\nRéponds uniquement avec le JSON."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1500
+        }
+      },
+      "id": "claude-adapt",
+      "name": "Adapt Content per Platform",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [450, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst content = JSON.parse(response.message.content);\nconst scheduledTime = $('Webhook Trigger').first().json.scheduledTime || new Date(Date.now() + 3600000).toISOString();\n\nreturn [\n  { json: { platform: 'linkedin', content: content.linkedin, scheduledTime } },\n  { json: { platform: 'twitter', content: content.twitter, scheduledTime } },\n  { json: { platform: 'instagram', content: content.instagram, scheduledTime } },\n  { json: { platform: 'facebook', content: content.facebook, scheduledTime } }\n];"
+      },
+      "id": "split-platforms",
+      "name": "Split by Platform",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "linkedin",
+              "leftValue": "={{ $json.platform }}",
+              "rightValue": "linkedin",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-linkedin",
+      "name": "Route LinkedIn",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [850, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "twitter",
+              "leftValue": "={{ $json.platform }}",
+              "rightValue": "twitter",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "route-twitter",
+      "name": "Route Twitter",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "url": "https://api.linkedin.com/v2/ugcPosts",
+        "authentication": "oAuth2Api",
+        "method": "POST",
+        "body": {
+          "author": "urn:li:person:{{ $env.LINKEDIN_PERSON_ID }}",
+          "lifecycleState": "PUBLISHED",
+          "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+              "shareCommentary": {
+                "text": "={{ $json.content }}"
+              },
+              "shareMediaCategory": "NONE"
+            }
+          },
+          "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"
+          }
+        },
+        "options": {}
+      },
+      "id": "post-linkedin",
+      "name": "Post to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 150],
+      "credentials": {
+        "linkedInOAuth2Api": {
+          "id": "linkedin-creds",
+          "name": "LinkedIn OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.content }}",
+        "additionalFields": {}
+      },
+      "id": "post-twitter",
+      "name": "Post to Twitter",
+      "type": "n8n-nodes-base.twitter",
+      "typeVersion": 2,
+      "position": [1050, 450],
+      "credentials": {
+        "twitterOAuth2Api": {
+          "id": "twitter-creds",
+          "name": "Twitter OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_SOCIAL_DB }}",
+        "properties": {
+          "Platform": { "select": { "name": "={{ $json.platform }}" } },
+          "Content": { "rich_text": [{ "text": { "content": "={{ $json.content }}" } }] },
+          "Status": { "select": { "name": "Published" } },
+          "Published At": { "date": { "start": "={{ new Date().toISOString() }}" } }
+        }
+      },
+      "id": "notion-log",
+      "name": "Log to Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Social Media Post Scheduler\n\n**Objectif:** Adapte et publie du contenu sur plusieurs plateformes\n\n**Flow:**\n1. Webhook reçoit le contenu source\n2. Claude adapte pour chaque plateforme\n3. Split et routage par plateforme\n4. Publication sur LinkedIn, Twitter, etc.\n5. Log dans Notion\n\n**Webhook payload:**\n```json\n{\n  \"content\": \"Votre contenu source\",\n  \"tone\": \"professionnel\",\n  \"scheduledTime\": \"2024-01-15T10:00:00Z\"\n}\n```\n\n**Credentials requis:**\n- Anthropic API\n- LinkedIn OAuth2\n- Twitter OAuth2\n- Notion API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[{ "node": "Adapt Content per Platform", "type": "main", "index": 0 }]]
+    },
+    "Adapt Content per Platform": {
+      "main": [[{ "node": "Split by Platform", "type": "main", "index": 0 }]]
+    },
+    "Split by Platform": {
+      "main": [
+        [
+          { "node": "Route LinkedIn", "type": "main", "index": 0 },
+          { "node": "Route Twitter", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Route LinkedIn": {
+      "main": [[{ "node": "Post to LinkedIn", "type": "main", "index": 0 }]]
+    },
+    "Route Twitter": {
+      "main": [[{ "node": "Post to Twitter", "type": "main", "index": 0 }]]
+    },
+    "Post to LinkedIn": {
+      "main": [[{ "node": "Log to Notion", "type": "main", "index": 0 }]]
+    },
+    "Post to Twitter": {
+      "main": [[{ "node": "Log to Notion", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "marketing" },
+    { "name": "social-media" },
+    { "name": "automation" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

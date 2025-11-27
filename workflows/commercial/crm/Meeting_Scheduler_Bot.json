@@ -1,0 +1,191 @@
+{
+  "name": "Meeting Scheduler Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meeting-request",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Meeting Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "meeting-request-webhook"
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "operation": "getAll",
+        "calendarId": "primary",
+        "returnAll": false,
+        "limit": 50,
+        "options": {
+          "timeMin": "={{ new Date().toISOString() }}",
+          "timeMax": "={{ new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString() }}",
+          "singleEvents": true,
+          "orderBy": "startTime"
+        }
+      },
+      "id": "gcal-availability",
+      "name": "Get Calendar Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [450, 300],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "gcal-creds",
+          "name": "Google Calendar OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const events = $input.all().map(e => e.json);\nconst request = $('Meeting Request').first().json;\n\n// Créneaux de travail (9h-18h)\nconst workStart = 9;\nconst workEnd = 18;\nconst meetingDuration = request.duration || 30; // minutes\n\n// Générer les 14 prochains jours\nconst slots = [];\nfor (let day = 1; day <= 14; day++) {\n  const date = new Date();\n  date.setDate(date.getDate() + day);\n  \n  // Skip weekends\n  if (date.getDay() === 0 || date.getDay() === 6) continue;\n  \n  for (let hour = workStart; hour < workEnd; hour++) {\n    const slotStart = new Date(date);\n    slotStart.setHours(hour, 0, 0, 0);\n    const slotEnd = new Date(slotStart);\n    slotEnd.setMinutes(slotEnd.getMinutes() + meetingDuration);\n    \n    // Vérifier si créneau libre\n    const isAvailable = !events.some(e => {\n      const eventStart = new Date(e.start.dateTime || e.start.date);\n      const eventEnd = new Date(e.end.dateTime || e.end.date);\n      return slotStart < eventEnd && slotEnd > eventStart;\n    });\n    \n    if (isAvailable) {\n      slots.push({\n        start: slotStart.toISOString(),\n        end: slotEnd.toISOString(),\n        display: slotStart.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) + \n                 ' à ' + slotStart.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })\n      });\n    }\n  }\n}\n\nreturn [{ \n  json: { \n    request,\n    availableSlots: slots.slice(0, 10),\n    totalSlots: slots.length\n  } \n}];"
+      },
+      "id": "find-slots",
+      "name": "Find Available Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-20250514"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Tu es un assistant commercial. Rédige un email proposant des créneaux de rendez-vous.\n\nDemande:\n- Nom: {{ $json.request.name }}\n- Email: {{ $json.request.email }}\n- Sujet: {{ $json.request.subject || 'Rendez-vous' }}\n- Message: {{ $json.request.message || '' }}\n\nCréneaux disponibles:\n{{ $json.availableSlots.map(s => '- ' + s.display).join('\\n') }}\n\nGénère un email professionnel et chaleureux proposant 3-5 créneaux.\nInclure:\n1. Remerciement pour l'intérêt\n2. Proposition de créneaux\n3. Lien pour confirmer (placeholder: [LIEN_CONFIRMATION])\n4. Alternative si aucun ne convient\n\nFormat: JSON { \"subject\": \"...\", \"body\": \"...\" }"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 600
+        }
+      },
+      "id": "claude-email",
+      "name": "Generate Proposal Email",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.2,
+      "position": [850, 300],
+      "credentials": {
+        "anthropicApi": {
+          "id": "anthropic-creds",
+          "name": "Anthropic API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "rdv@mywai.fr",
+        "toEmail": "={{ $('Find Available Slots').first().json.request.email }}",
+        "subject": "={{ JSON.parse($json.message.content).subject }}",
+        "html": "={{ JSON.parse($json.message.content).body }}",
+        "options": {
+          "replyTo": "rdv@mywai.fr"
+        }
+      },
+      "id": "send-proposal",
+      "name": "Send Proposal Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1050, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_MEETINGS_DB }}",
+        "properties": {
+          "Name": { "title": [{ "text": { "content": "RDV - {{ $('Find Available Slots').first().json.request.name }}" } }] },
+          "Email": { "email": "={{ $('Find Available Slots').first().json.request.email }}" },
+          "Subject": { "rich_text": [{ "text": { "content": "={{ $('Find Available Slots').first().json.request.subject || 'Non spécifié' }}" } }] },
+          "Status": { "select": { "name": "Proposal Sent" } },
+          "Slots Proposed": { "number": "={{ $('Find Available Slots').first().json.availableSlots.length }}" }
+        }
+      },
+      "id": "notion-track",
+      "name": "Track in Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [1250, 300],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "channel": "#sales",
+        "text": ":calendar: *Nouvelle demande de RDV*\n\n*De:* {{ $('Find Available Slots').first().json.request.name }}\n*Email:* {{ $('Find Available Slots').first().json.request.email }}\n*Sujet:* {{ $('Find Available Slots').first().json.request.subject || 'Non spécifié' }}\n\nProposition envoyée avec {{ $('Find Available Slots').first().json.availableSlots.length }} créneaux."
+      },
+      "id": "slack-notify",
+      "name": "Notify Team",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [1450, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Meeting Scheduler Bot\n\n**Objectif:** Automatise la planification de RDV avec proposition de créneaux\n\n**Flow:**\n1. Webhook reçoit demande de RDV\n2. Récupère les événements Google Calendar\n3. Calcule les créneaux disponibles\n4. Génère email personnalisé avec Claude\n5. Envoie la proposition\n6. Track dans Notion\n7. Notifie l'équipe\n\n**Webhook payload:**\n```json\n{\n  \"name\": \"John Doe\",\n  \"email\": \"john@example.com\",\n  \"subject\": \"Demo produit\",\n  \"message\": \"Intéressé par...\",\n  \"duration\": 30\n}\n```\n\n**Credentials requis:**\n- Google Calendar OAuth2\n- Anthropic API\n- SMTP\n- Notion API\n- Slack API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "Meeting Request": {
+      "main": [[{ "node": "Get Calendar Events", "type": "main", "index": 0 }]]
+    },
+    "Get Calendar Events": {
+      "main": [[{ "node": "Find Available Slots", "type": "main", "index": 0 }]]
+    },
+    "Find Available Slots": {
+      "main": [[{ "node": "Generate Proposal Email", "type": "main", "index": 0 }]]
+    },
+    "Generate Proposal Email": {
+      "main": [[{ "node": "Send Proposal Email", "type": "main", "index": 0 }]]
+    },
+    "Send Proposal Email": {
+      "main": [
+        [
+          { "node": "Track in Notion", "type": "main", "index": 0 },
+          { "node": "Notify Team", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "commercial" },
+    { "name": "crm" },
+    { "name": "scheduling" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}

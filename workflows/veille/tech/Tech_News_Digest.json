@@ -1,0 +1,60 @@
+{
+  "name": "Tech News Digest",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "days", "triggerAtHour": 7 }] } },
+      "id": "schedule", "name": "Daily 7h", "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.feedly.com/v3/streams/contents",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "streamId": "{{ $env.FEEDLY_TECH_STREAM }}", "count": 50, "ranked": "newest" } }
+      },
+      "id": "feedly-fetch", "name": "Fetch Tech RSS", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [450, 300],
+      "credentials": { "httpHeaderAuth": { "id": "feedly-creds", "name": "Feedly API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.first().json.items || [];\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\n\nconst todayArticles = items.filter(a => new Date(a.published) >= today).map(a => ({\n  title: a.title,\n  summary: (a.summary?.content || '').replace(/<[^>]*>/g, '').substring(0, 500),\n  url: a.canonicalUrl || a.originId,\n  source: a.origin?.title,\n  engagement: a.engagement || 0,\n  published: a.published\n}));\n\nreturn [{ json: { articles: todayArticles.sort((a, b) => b.engagement - a.engagement).slice(0, 15), count: todayArticles.length } }];"
+      },
+      "id": "filter-articles", "name": "Filter Today's Articles", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un expert tech. Génère un digest quotidien à partir de ces articles.\n\nArticles du jour:\n{{ JSON.stringify($json.articles, null, 2) }}\n\nGénère:\n{\n  \"headline\": \"Titre accrocheur du jour\",\n  \"summary\": \"Résumé en 3-4 phrases des tendances\",\n  \"topStories\": [\n    { \"title\": \"...\", \"summary\": \"2 phrases\", \"url\": \"...\", \"importance\": \"high|medium\" }\n  ],\n  \"quickBites\": [\"Brève 1\", \"Brève 2\", ...],\n  \"trendingTopics\": [\"Topic 1\", ...],\n  \"weeklyTheme\": \"Thème émergent de la semaine\"\n}" }] },
+        "options": { "maxTokens": 1500 }
+      },
+      "id": "claude-digest", "name": "Generate Digest", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [850, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_TECH_DIGEST_DB }}",
+        "properties": {
+          "Date": { "title": [{ "text": { "content": "={{ new Date().toISOString().split('T')[0] }}" } }] },
+          "Headline": { "rich_text": [{ "text": { "content": "={{ JSON.parse($json.message.content).headline }}" } }] },
+          "Articles Count": { "number": "={{ $('Filter Today\\'s Articles').first().json.count }}" }
+        },
+        "blockContent": "={{ `## ${JSON.parse($json.message.content).headline}\\n\\n${JSON.parse($json.message.content).summary}\\n\\n## Top Stories\\n${JSON.parse($json.message.content).topStories.map(s => `### ${s.title}\\n${s.summary}\\n[Lire](${s.url})`).join('\\n\\n')}\\n\\n## Quick Bites\\n${JSON.parse($json.message.content).quickBites.map(b => '• ' + b).join('\\n')}` }}"
+      },
+      "id": "notion-save", "name": "Save Digest", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "#tech-news", "text": ":newspaper: *Tech Digest - {{ new Date().toLocaleDateString('fr-FR') }}*\n\n*{{ JSON.parse($('Generate Digest').first().json.message.content).headline }}*\n\n{{ JSON.parse($('Generate Digest').first().json.message.content).summary }}\n\n:fire: *Trending:* {{ JSON.parse($('Generate Digest').first().json.message.content).trendingTopics.join(', ') }}" },
+      "id": "slack-digest", "name": "Post Digest", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1250, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Daily 7h": { "main": [[{ "node": "Fetch Tech RSS", "type": "main", "index": 0 }]] },
+    "Fetch Tech RSS": { "main": [[{ "node": "Filter Today's Articles", "type": "main", "index": 0 }]] },
+    "Filter Today's Articles": { "main": [[{ "node": "Generate Digest", "type": "main", "index": 0 }]] },
+    "Generate Digest": { "main": [[{ "node": "Save Digest", "type": "main", "index": 0 }]] },
+    "Save Digest": { "main": [[{ "node": "Post Digest", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "veille" }, { "name": "tech" }]
+}

@@ -1,0 +1,64 @@
+{
+  "name": "Invoice Generator",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "generate-invoice", "options": {} },
+      "id": "webhook", "name": "Invoice Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "contact", "operation": "get", "contactId": "={{ $json.clientId }}"
+      },
+      "id": "hubspot-client", "name": "Get Client Info", "type": "n8n-nodes-base.hubspot", "typeVersion": 2, "position": [450, 300],
+      "credentials": { "hubspotApi": { "id": "hubspot-creds", "name": "HubSpot API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const client = $('Get Client Info').first().json.properties;\nconst request = $('Invoice Request').first().json;\nconst invoiceNumber = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}`;\n\nconst subtotal = request.items.reduce((sum, item) => sum + (item.quantity * item.unitPrice), 0);\nconst tax = subtotal * 0.20;\nconst total = subtotal + tax;\n\nreturn [{\n  json: {\n    invoiceNumber,\n    client: { name: `${client.firstname} ${client.lastname}`, company: client.company, email: client.email, address: client.address || '' },\n    items: request.items,\n    subtotal, tax, total,\n    issueDate: new Date().toISOString().split('T')[0],\n    dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],\n    paymentTerms: '30 jours'\n  }\n}];"
+      },
+      "id": "prepare-invoice", "name": "Prepare Invoice Data", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Génère le HTML d'une facture professionnelle:\n\n{{ JSON.stringify($json, null, 2) }}\n\nInclure: logo placeholder, infos entreprise, détail lignes, totaux, conditions de paiement, RIB.\nStyle: clean, professionnel, imprimable A4." }] },
+        "options": { "maxTokens": 2000 }
+      },
+      "id": "claude-html", "name": "Generate Invoice HTML", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [850, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "facturation@mywai.fr",
+        "toEmail": "={{ $('Prepare Invoice Data').first().json.client.email }}",
+        "subject": "Facture {{ $('Prepare Invoice Data').first().json.invoiceNumber }} - MyWai",
+        "html": "={{ $json.message.content }}"
+      },
+      "id": "send-invoice", "name": "Send Invoice Email", "type": "n8n-nodes-base.emailSend", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "smtp": { "id": "smtp-creds", "name": "SMTP" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_INVOICES_DB }}",
+        "properties": {
+          "Number": { "title": [{ "text": { "content": "={{ $('Prepare Invoice Data').first().json.invoiceNumber }}" } }] },
+          "Client": { "rich_text": [{ "text": { "content": "={{ $('Prepare Invoice Data').first().json.client.company }}" } }] },
+          "Amount": { "number": "={{ $('Prepare Invoice Data').first().json.total }}" },
+          "Status": { "select": { "name": "Sent" } },
+          "Due Date": { "date": { "start": "={{ $('Prepare Invoice Data').first().json.dueDate }}" } }
+        }
+      },
+      "id": "notion-log", "name": "Log Invoice", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1250, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    }
+  ],
+  "connections": {
+    "Invoice Request": { "main": [[{ "node": "Get Client Info", "type": "main", "index": 0 }]] },
+    "Get Client Info": { "main": [[{ "node": "Prepare Invoice Data", "type": "main", "index": 0 }]] },
+    "Prepare Invoice Data": { "main": [[{ "node": "Generate Invoice HTML", "type": "main", "index": 0 }]] },
+    "Generate Invoice HTML": { "main": [[{ "node": "Send Invoice Email", "type": "main", "index": 0 }]] },
+    "Send Invoice Email": { "main": [[{ "node": "Log Invoice", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "finance" }, { "name": "invoicing" }]
+}

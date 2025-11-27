@@ -1,0 +1,63 @@
+{
+  "name": "Onboarding Checklist Creator",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "new-hire-onboarding", "options": {} },
+      "id": "webhook", "name": "New Hire Confirmed", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const hire = $input.first().json;\nconst startDate = new Date(hire.startDate);\n\nconst tasks = [\n  { task: 'Créer compte email', owner: 'IT', deadline: -3, category: 'IT' },\n  { task: 'Commander matériel', owner: 'IT', deadline: -5, category: 'IT' },\n  { task: 'Créer accès Slack', owner: 'IT', deadline: -1, category: 'IT' },\n  { task: 'Préparer contrat', owner: 'RH', deadline: -5, category: 'Admin' },\n  { task: 'Envoyer welcome pack', owner: 'RH', deadline: -3, category: 'Admin' },\n  { task: 'Planifier welcome meeting', owner: hire.manager, deadline: 0, category: 'Manager' },\n  { task: 'Assigner buddy', owner: hire.manager, deadline: -2, category: 'Manager' },\n  { task: 'Préparer 1ère semaine', owner: hire.manager, deadline: -1, category: 'Manager' },\n  { task: 'Tour des bureaux', owner: hire.manager, deadline: 0, category: 'Day 1' },\n  { task: 'Setup poste de travail', owner: 'IT', deadline: 0, category: 'Day 1' },\n  { task: 'Formation outils', owner: hire.manager, deadline: 1, category: 'Week 1' },\n  { task: 'Présentation équipe', owner: hire.manager, deadline: 1, category: 'Week 1' },\n  { task: 'Point RH admin', owner: 'RH', deadline: 2, category: 'Week 1' },\n  { task: 'Feedback 1ère semaine', owner: 'RH', deadline: 5, category: 'Follow-up' },\n  { task: 'Point 30 jours', owner: hire.manager, deadline: 30, category: 'Follow-up' }\n].map(t => ({\n  ...t,\n  dueDate: new Date(startDate.getTime() + t.deadline * 24 * 60 * 60 * 1000).toISOString().split('T')[0]\n}));\n\nreturn [{ json: { hire, tasks } }];"
+      },
+      "id": "generate-checklist", "name": "Generate Checklist", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_ONBOARDING_DB }}",
+        "properties": {
+          "Employee": { "title": [{ "text": { "content": "={{ $json.hire.name }}" } }] },
+          "Position": { "rich_text": [{ "text": { "content": "={{ $json.hire.position }}" } }] },
+          "Department": { "select": { "name": "={{ $json.hire.department }}" } },
+          "Start Date": { "date": { "start": "={{ $json.hire.startDate }}" } },
+          "Manager": { "rich_text": [{ "text": { "content": "={{ $json.hire.manager }}" } }] },
+          "Status": { "select": { "name": "In Progress" } }
+        }
+      },
+      "id": "notion-onboarding", "name": "Create Onboarding Record", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [650, 200],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Generate Checklist').first().json;\nreturn data.tasks.map(t => ({ json: { ...t, employeeName: data.hire.name, employeeId: data.hire.id } }));"
+      },
+      "id": "split-tasks", "name": "Split Tasks", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_TASKS_DB }}",
+        "properties": {
+          "Task": { "title": [{ "text": { "content": "[Onboarding {{ $json.employeeName }}] {{ $json.task }}" } }] },
+          "Owner": { "rich_text": [{ "text": { "content": "={{ $json.owner }}" } }] },
+          "Due Date": { "date": { "start": "={{ $json.dueDate }}" } },
+          "Category": { "select": { "name": "={{ $json.category }}" } },
+          "Status": { "select": { "name": "To Do" } }
+        }
+      },
+      "id": "create-tasks", "name": "Create Tasks", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [850, 400],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "#rh", "text": ":clipboard: *Onboarding créé*\n\n*{{ $('Generate Checklist').first().json.hire.name }}* - {{ $('Generate Checklist').first().json.hire.position }}\nDébut: {{ $('Generate Checklist').first().json.hire.startDate }}\n{{ $('Generate Checklist').first().json.tasks.length }} tâches créées" },
+      "id": "slack-notify", "name": "Notify HR", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1050, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "New Hire Confirmed": { "main": [[{ "node": "Generate Checklist", "type": "main", "index": 0 }]] },
+    "Generate Checklist": { "main": [[{ "node": "Create Onboarding Record", "type": "main", "index": 0 }, { "node": "Split Tasks", "type": "main", "index": 0 }]] },
+    "Split Tasks": { "main": [[{ "node": "Create Tasks", "type": "main", "index": 0 }]] },
+    "Create Tasks": { "main": [[{ "node": "Notify HR", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "rh" }, { "name": "onboarding" }]
+}

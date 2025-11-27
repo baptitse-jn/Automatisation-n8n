@@ -1,0 +1,76 @@
+{
+  "name": "Meeting Prep Agent",
+  "nodes": [
+    {
+      "parameters": { "httpMethod": "POST", "path": "meeting-prep", "options": {} },
+      "id": "webhook", "name": "Meeting Prep Request", "type": "n8n-nodes-base.webhook", "typeVersion": 1.1, "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "resource": "event", "operation": "get", "calendarId": "primary", "eventId": "={{ $json.eventId }}"
+      },
+      "id": "get-event", "name": "Get Calendar Event", "type": "n8n-nodes-base.googleCalendar", "typeVersion": 1.2, "position": [450, 200],
+      "credentials": { "googleCalendarOAuth2Api": { "id": "gcal-creds", "name": "Google Calendar OAuth2" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $('Get Calendar Event').first().json;\nconst attendees = (event.attendees || []).map(a => a.email).filter(e => !e.includes('resource'));\nreturn attendees.map(email => ({ json: { email } }));"
+      },
+      "id": "extract-attendees", "name": "Extract Attendees", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [450, 400]
+    },
+    {
+      "parameters": {
+        "url": "https://api.search.brave.com/res/v1/web/search",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "options": { "qs": { "q": "{{ $json.email.split('@')[0] }} {{ $json.email.split('@')[1].split('.')[0] }} linkedin", "count": 3 } }
+      },
+      "id": "search-attendee", "name": "Search Attendee Info", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.1, "position": [650, 400],
+      "credentials": { "httpHeaderAuth": { "id": "brave-creds", "name": "Brave Search API" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const event = $('Get Calendar Event').first().json;\nconst attendeeInfo = $('Search Attendee Info').all().map(a => ({\n  email: a.json.email,\n  searchResults: (a.json.web?.results || []).slice(0, 2).map(r => ({ title: r.title, description: r.description }))\n}));\n\nreturn [{ json: {\n  meeting: { title: event.summary, description: event.description, start: event.start, attendeeCount: (event.attendees || []).length },\n  attendees: attendeeInfo\n} }];"
+      },
+      "id": "compile-info", "name": "Compile Information", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "modelId": { "__rl": true, "mode": "list", "value": "claude-sonnet-4-20250514" },
+        "messages": { "values": [{ "content": "Tu es un assistant exécutif. Prépare un brief pour cette réunion.\n\nRéunion:\n- Titre: {{ $json.meeting.title }}\n- Description: {{ $json.meeting.description }}\n- Date: {{ $json.meeting.start.dateTime }}\n- Participants: {{ $json.attendees.length }}\n\nInfos participants:\n{{ JSON.stringify($json.attendees, null, 2) }}\n\nGénère un brief de préparation:\n{\n  \"meetingType\": \"internal|external|sales|interview|other\",\n  \"objectives\": [\"Objectif probable 1\", ...],\n  \"attendeeBriefs\": [\n    { \"name\": \"Nom déduit\", \"role\": \"Rôle probable\", \"company\": \"Entreprise\", \"keyInfo\": \"Info pertinente\", \"talkingPoints\": [\"Point 1\", ...] }\n  ],\n  \"suggestedAgenda\": [\"Point 1\", ...],\n  \"questionsToAsk\": [\"Question 1\", ...],\n  \"documentsToReview\": [\"Doc 1 si pertinent\", ...],\n  \"preparationTips\": [\"Tip 1\", ...]\n}" }] },
+        "options": { "maxTokens": 1500 }
+      },
+      "id": "claude-prep", "name": "Generate Prep Brief", "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic", "typeVersion": 1.2, "position": [1050, 300],
+      "credentials": { "anthropicApi": { "id": "anthropic-creds", "name": "Anthropic API" } }
+    },
+    {
+      "parameters": {
+        "operation": "create", "databaseId": "={{ $env.NOTION_MEETING_PREP_DB }}",
+        "properties": {
+          "Meeting": { "title": [{ "text": { "content": "={{ $('Compile Information').first().json.meeting.title }}" } }] },
+          "Date": { "date": { "start": "={{ $('Compile Information').first().json.meeting.start.dateTime }}" } },
+          "Type": { "select": { "name": "={{ JSON.parse($json.message.content).meetingType }}" } },
+          "Attendees": { "number": "={{ $('Compile Information').first().json.attendees.length }}" }
+        },
+        "blockContent": "={{ `## Objectifs\\n${JSON.parse($json.message.content).objectives.map(o => '- ' + o).join('\\n')}\\n\\n## Participants\\n${JSON.parse($json.message.content).attendeeBriefs.map(a => '### ' + a.name + '\\n- Role: ' + a.role + '\\n- ' + a.keyInfo).join('\\n\\n')}\\n\\n## Agenda suggéré\\n${JSON.parse($json.message.content).suggestedAgenda.map((a, i) => (i+1) + '. ' + a).join('\\n')}\\n\\n## Questions à poser\\n${JSON.parse($json.message.content).questionsToAsk.map(q => '- ' + q).join('\\n')}` }}"
+      },
+      "id": "notion-save", "name": "Save Prep Brief", "type": "n8n-nodes-base.notion", "typeVersion": 2.1, "position": [1250, 300],
+      "credentials": { "notionApi": { "id": "notion-creds", "name": "Notion API" } }
+    },
+    {
+      "parameters": { "channel": "={{ $('Meeting Prep Request').first().json.slackChannel || '@user' }}", "text": ":clipboard: *Brief de réunion prêt*\n\n*{{ $('Compile Information').first().json.meeting.title }}*\n{{ new Date($('Compile Information').first().json.meeting.start.dateTime).toLocaleString('fr-FR') }}\n\nBrief disponible dans Notion." },
+      "id": "slack-notify", "name": "Send Brief", "type": "n8n-nodes-base.slack", "typeVersion": 2.1, "position": [1450, 300],
+      "credentials": { "slackApi": { "id": "slack-creds", "name": "Slack API" } }
+    }
+  ],
+  "connections": {
+    "Meeting Prep Request": { "main": [[{ "node": "Get Calendar Event", "type": "main", "index": 0 }, { "node": "Extract Attendees", "type": "main", "index": 0 }]] },
+    "Extract Attendees": { "main": [[{ "node": "Search Attendee Info", "type": "main", "index": 0 }]] },
+    "Get Calendar Event": { "main": [[{ "node": "Compile Information", "type": "main", "index": 0 }]] },
+    "Search Attendee Info": { "main": [[{ "node": "Compile Information", "type": "main", "index": 0 }]] },
+    "Compile Information": { "main": [[{ "node": "Generate Prep Brief", "type": "main", "index": 0 }]] },
+    "Generate Prep Brief": { "main": [[{ "node": "Save Prep Brief", "type": "main", "index": 0 }]] },
+    "Save Prep Brief": { "main": [[{ "node": "Send Brief", "type": "main", "index": 0 }]] }
+  },
+  "active": false, "settings": { "executionOrder": "v1" },
+  "tags": [{ "name": "ai-agents" }, { "name": "meetings" }]
+}

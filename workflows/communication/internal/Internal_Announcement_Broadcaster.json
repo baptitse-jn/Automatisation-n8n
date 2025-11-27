@@ -1,0 +1,150 @@
+{
+  "name": "Internal Announcement Broadcaster",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "internal-announcement",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "New Announcement",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "webhookId": "announcement-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\n\nconst priorities = {\n  'urgent': { emoji: ':rotating_light:', color: '#e74c3c', subject: '[URGENT] ' },\n  'important': { emoji: ':warning:', color: '#f39c12', subject: '[Important] ' },\n  'info': { emoji: ':information_source:', color: '#3498db', subject: '' },\n  'celebration': { emoji: ':tada:', color: '#27ae60', subject: '' }\n};\n\nconst priority = priorities[data.priority] || priorities.info;\n\nreturn [{\n  json: {\n    title: data.title,\n    message: data.message,\n    priority: data.priority,\n    priorityConfig: priority,\n    channels: data.channels || ['slack', 'email', 'notion'],\n    targetAudience: data.audience || 'all',\n    author: data.author || 'Admin',\n    attachments: data.attachments || [],\n    scheduledAt: data.scheduledAt || new Date().toISOString()\n  }\n}];"
+      },
+      "id": "prepare-announcement",
+      "name": "Prepare Announcement",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "channel": "={{ $json.targetAudience === 'all' ? '#general' : '#' + $json.targetAudience }}",
+        "text": "{{ $json.priorityConfig.emoji }} *{{ $json.title }}*\n\n{{ $json.message }}\n\n_— {{ $json.author }}_",
+        "attachments": [],
+        "otherOptions": {}
+      },
+      "id": "slack-post",
+      "name": "Post to Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [700, 150],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "user",
+        "operation": "getAll",
+        "returnAll": true,
+        "filters": {}
+      },
+      "id": "get-users",
+      "name": "Get All Users",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [650, 300],
+      "credentials": {
+        "slackApi": {
+          "id": "slack-creds",
+          "name": "Slack API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "communication@mywai.fr",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $('Prepare Announcement').first().json.priorityConfig.subject }}{{ $('Prepare Announcement').first().json.title }}",
+        "html": "<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;\">\n  <div style=\"background: {{ $('Prepare Announcement').first().json.priorityConfig.color }}; color: white; padding: 20px; text-align: center;\">\n    <h1>{{ $('Prepare Announcement').first().json.title }}</h1>\n  </div>\n  <div style=\"padding: 30px; background: #f8f9fa;\">\n    <p>{{ $('Prepare Announcement').first().json.message }}</p>\n  </div>\n  <div style=\"padding: 15px; text-align: center; color: #666; font-size: 12px;\">\n    <p>Communication interne - {{ $('Prepare Announcement').first().json.author }}</p>\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Email to Users",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [900, 300],
+      "credentials": {
+        "smtp": {
+          "id": "smtp-creds",
+          "name": "SMTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "databaseId": "={{ $env.NOTION_ANNOUNCEMENTS_DB }}",
+        "properties": {
+          "Title": { "title": [{ "text": { "content": "={{ $json.title }}" } }] },
+          "Priority": { "select": { "name": "={{ $json.priority }}" } },
+          "Author": { "rich_text": [{ "text": { "content": "={{ $json.author }}" } }] },
+          "Audience": { "select": { "name": "={{ $json.targetAudience }}" } },
+          "Published At": { "date": { "start": "={{ new Date().toISOString() }}" } }
+        },
+        "blockContent": "={{ $json.message }}"
+      },
+      "id": "notion-archive",
+      "name": "Archive in Notion",
+      "type": "n8n-nodes-base.notion",
+      "typeVersion": 2.1,
+      "position": [700, 450],
+      "credentials": {
+        "notionApi": {
+          "id": "notion-creds",
+          "name": "Notion API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Internal Announcement Broadcaster\n\n**Objectif:** Diffuse les annonces internes sur plusieurs canaux simultanément\n\n**Flow:**\n1. Webhook reçoit l'annonce\n2. Prépare le formatage selon priorité\n3. Post sur Slack (parallèle)\n4. Récupère liste users pour email (parallèle)\n5. Envoie email à chaque user\n6. Archive dans Notion\n\n**Webhook payload:**\n```json\n{\n  \"title\": \"Titre de l'annonce\",\n  \"message\": \"Contenu de l'annonce\",\n  \"priority\": \"urgent|important|info|celebration\",\n  \"audience\": \"all|engineering|sales|marketing\",\n  \"author\": \"CEO\",\n  \"channels\": [\"slack\", \"email\", \"notion\"]\n}\n```\n\n**Credentials requis:**\n- Slack API\n- SMTP\n- Notion API"
+      },
+      "id": "sticky-doc",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 100]
+    }
+  ],
+  "connections": {
+    "New Announcement": {
+      "main": [[{ "node": "Prepare Announcement", "type": "main", "index": 0 }]]
+    },
+    "Prepare Announcement": {
+      "main": [
+        [
+          { "node": "Post to Slack", "type": "main", "index": 0 },
+          { "node": "Get All Users", "type": "main", "index": 0 },
+          { "node": "Archive in Notion", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Get All Users": {
+      "main": [[{ "node": "Send Email to Users", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "communication" },
+    { "name": "internal" },
+    { "name": "broadcast" }
+  ],
+  "meta": {
+    "instanceId": ""
+  }
+}
