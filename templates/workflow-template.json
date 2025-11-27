@@ -1,0 +1,34 @@
+{
+  "name": "Template - Nom du workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-node",
+      "name": "Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "content": "## Documentation\n\n**Objectif:** Décrire l'objectif du workflow\n\n**Trigger:** Type de déclencheur\n\n**Inputs:** Données d'entrée attendues\n\n**Outputs:** Résultat produit\n\n**Credentials requis:**\n- Credential 1\n- Credential 2"
+      },
+      "id": "sticky-note",
+      "name": "Documentation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [50, 200]
+    }
+  ],
+  "connections": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "",
+  "meta": {
+    "templateId": "workflow-template",
+    "instanceId": ""
+  },
+  "tags": []
+}
