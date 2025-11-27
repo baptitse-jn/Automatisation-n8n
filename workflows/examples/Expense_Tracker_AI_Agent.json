@@ -1,0 +1,100 @@
+{
+  "id": "expense-tracker-ai-agent",
+  "meta": { "instanceId": "n8n-template-expense-tracker" },
+  "name": "AI Agent: Suivi des Dépenses avec Google Sheets",
+  "tags": ["ai-agent", "google-sheets", "expense-tracker"],
+  "nodes": [
+    {
+      "id": "ai-agent",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [360, 40],
+      "parameters": {
+        "options": {
+          "maxIterations": 3,
+          "systemMessage": "Tu es un comptable serviable. Utilise l'outil de sauvegarde pour enregistrer les dépenses dans la base de données."
+        }
+      },
+      "typeVersion": 1.7
+    },
+    {
+      "id": "chat-trigger",
+      "name": "Réception Message Chat",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [0, 40],
+      "parameters": { "options": {} },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "openai-model",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [340, 300],
+      "parameters": { "options": {} },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "memory",
+      "name": "Window Buffer Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [500, 300],
+      "parameters": {},
+      "typeVersion": 1.3
+    },
+    {
+      "id": "expense-parser",
+      "name": "Extracteur de Dépenses",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "position": [400, 600],
+      "parameters": {
+        "text": "=Convertir cette dépense en JSON:\n\n{{ $json.input1 }}",
+        "options": {},
+        "attributes": {
+          "attributes": [
+            { "name": "cost", "type": "number", "required": true, "description": "coût de la dépense" },
+            { "name": "descr", "required": true, "description": "description de la dépense" },
+            { "name": "date", "type": "date", "description": "date au format UTC" }
+          ]
+        }
+      },
+      "typeVersion": 1
+    },
+    {
+      "id": "google-sheets",
+      "name": "Sauvegarder dans Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "position": [760, 600],
+      "parameters": {
+        "columns": {
+          "value": {
+            "cost": "={{ $json.output.cost }}",
+            "date": "={{ $json.output.date }}",
+            "descr": "={{ $json.output.descr }}"
+          }
+        },
+        "options": { "useAppend": true },
+        "operation": "append"
+      },
+      "typeVersion": 4.5
+    },
+    {
+      "id": "note-instructions",
+      "name": "Note - Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [-760, 200],
+      "parameters": {
+        "width": 720,
+        "height": 500,
+        "content": "## Suivi des Dépenses via Chat\n\nCe workflow permet de sauvegarder des dépenses par message chat.\nL'IA parse le message et l'enregistre dans Google Sheets.\n\n### Installation\n1. Configurez Google Sheets\n2. Activez le workflow\n3. Envoyez un message: \"lavage voiture; 59.3 eur; 25 jan 2024\""
+      },
+      "typeVersion": 1
+    }
+  ],
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "connections": {
+    "Réception Message Chat": { "main": [[{ "node": "AI Agent", "type": "main", "index": 0 }]] },
+    "OpenAI Chat Model": { "ai_languageModel": [[{ "node": "AI Agent", "type": "ai_languageModel", "index": 0 }]] },
+    "Window Buffer Memory": { "ai_memory": [[{ "node": "AI Agent", "type": "ai_memory", "index": 0 }]] }
+  }
+}
